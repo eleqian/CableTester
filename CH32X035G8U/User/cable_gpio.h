@@ -29,7 +29,7 @@ extern "C" {
 #define USB3_SBU_PIN      GPIO_Pin_7    // PB7
 
 // USB-A接口 (USB2) 信号线
-#define USB2_AUX_G_PIN    GPIO_Pin_6    // PB6
+#define CC_R_PIN            GPIO_Pin_6    // PB6 - CC_R，通过5.1k电阻控制CC_E的上拉/下拉
 
 // Type-C接口2 (USB4) 信号线
 #define USB4_CC_E_PIN     GPIO_Pin_1    // PA1
@@ -69,6 +69,13 @@ void GPIO_Configuration(void);                          // GPIO初始化
 void Set_Test_Voltage_Enable(uint8_t enable);           // 测试电压使能控制
 uint8_t Read_Key_State(void);                           // 读取按键状态
 signal_status_t Test_Signal_Connection(GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin);  // 信号线连通性测试
+
+/* CC_R控制模式定义 */
+#define CC_R_PULL_UP    1   // CC_R输出高电平，通过5.1k上拉CC_E
+#define CC_R_PULL_DOWN  0   // CC_R输出低电平，通过5.1k下拉CC_E
+#define CC_R_FLOATING   2   // CC_R浮空，CC_E无外部电阻
+
+void CC_R_Set_Pull_Mode(uint8_t mode);  // 设置CC_R输出状态以控制CC_E外部电阻
 
 #ifdef __cplusplus
 }

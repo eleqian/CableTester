@@ -33,7 +33,7 @@
 #define SERIES_RESISTOR 100000
 
 /* 电阻测量最大值(毫欧) */
-#define RES_CABLE_MAX 1000
+#define RES_CABLE_MAX (SERIES_RESISTOR / INA199_GAIN)
 
 /******************************************************************************
  *                    全局变量
@@ -235,13 +235,9 @@ void Test_Cable_Continuity(test_result_t *result)
     result->power_ok = 0;  // 将在电阻测量完成后更新
 
     /* CC信号检测（CC1和CC2分别检测） */
-    // CC_E (PA1) 输出低电平作为回路
-    GPIO_InitTypeDef GPIO_InitStructure = {0};
-    GPIO_InitStructure.GPIO_Pin = USB4_CC_E_PIN;
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;  // 推挽输出
-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-    GPIO_Init(GPIOA, &GPIO_InitStructure);
-    GPIO_ResetBits(GPIOA, USB4_CC_E_PIN);  // 输出低电平
+    // 使用CC_R提供5.1k下拉电阻作为CC信号的回路
+    CC_R_Set_Pull_Mode(CC_R_PULL_DOWN);
+    Delay_Ms(1);  // 等待稳定
 
     // 直接读取CC1和CC2电平（已在初始化时配置为上拉输入）
     uint8_t cc1_level = GPIO_ReadInputDataBit(GPIOC, USB3_CC1_PIN);
@@ -251,10 +247,8 @@ void Test_Cable_Continuity(test_result_t *result)
     result->cc1_ok = (cc1_level == Bit_RESET) ? 1 : 0;
     result->cc2_ok = (cc2_level == Bit_RESET) ? 1 : 0;
 
-    // 恢复CC_E为浮空输入（避免影响其他测试）
-    GPIO_InitStructure.GPIO_Pin = USB4_CC_E_PIN;
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
-    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    // 恢复CC_R为浮空（避免影响其他测试）
+    CC_R_Set_Pull_Mode(CC_R_FLOATING);
 
     /* D+/D- 信号检测（合并测试） */
     // D+ (PB10) 已配置为上拉输入，D-接地，右侧D+/D-短接
@@ -416,25 +410,46 @@ void Detect_Emark_Info(test_result_t *result)
 
 /**
  * @brief  检测快充线缆类型（内部实现）
- * @return 0-无快充, 1-VOOC, 2-Huawei
+ * @return 0-无快充, 1-Huawei单CC电阻, 2-Huawei双CC电阻
  */
 static uint8_t Detect_Fast_Charge_Type_Internal(void)
 {
-    // // 读取AUX_G引脚电平（VOOC快充线检测）
-    // uint8_t aux_g_level = GPIO_ReadInputDataBit(GPIOB, USB2_AUX_G_PIN);
+    uint16_t adc_value;
+    uint32_t voltage_mv;
+    GPIO_InitTypeDef GPIO_InitStructure = {0};
 
-    // // VOOC快充线会在AUX_G上有特定电平
-    // if (aux_g_level == Bit_RESET) {
-    //     return 1;  // VOOC快充
-    // }
+    // 步骤1: 配置PA1为模拟输入用于ADC测量
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
+    GPIO_InitStructure.GPIO_Pin = USB4_CC_E_PIN;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
 
-    // Huawei快充需要通过CC引脚识别电阻检测
-    // CC引脚已在初始化时配置为上拉输入，直接读取即可
-    uint8_t cc1_level = GPIO_ReadInputDataBit(GPIOC, USB3_CC1_PIN);
-    uint8_t cc2_level = GPIO_ReadInputDataBit(GPIOC, USB3_CC2_PIN);
+    // 步骤2: 设置CC_R为上拉模式（通过5.1k上拉CC_E）
+    CC_R_Set_Pull_Mode(CC_R_PULL_UP);
+    Delay_Ms(5);  // 等待稳定
 
-    // Huawei快充线通常在CC上有特定的识别电阻
-    if (cc1_level == Bit_RESET || cc2_level == Bit_RESET) {
+    // 步骤3: 读取CC_E的ADC值
+    adc_value = ADC_Read_Channel(ADC_CHANNEL_CC_E);
+
+    // 步骤4: 恢复CC_R为浮空，PA1恢复为浮空输入
+    CC_R_Set_Pull_Mode(CC_R_FLOATING);
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+    // 步骤5: 计算电压并判断
+    // VREF=3.3V, 12位ADC
+    voltage_mv = (uint32_t)adc_value * 3300 / 4095;
+
+    // 华为充电线原理：
+    // - USB-A转C线在CC引脚有56k电阻连接VBUS
+    // - VBUS已短接到GND用于线阻测量，相当于56k下拉到GND
+    // - CC_E通过5.1k上拉到3.3V，形成分压电路
+    // - 单CC脚：V = 3.3V * 56k / (5.1k + 56k) ≈ 3.0V
+    // - 双CC脚并联：V = 3.3V * 28k / (5.1k + 28k) ≈ 2.8V
+
+    if (voltage_mv <= 3100 && voltage_mv >= 2900) {
+        return 1;  // Huawei快充
+    } else if (voltage_mv <= 2900 && voltage_mv >= 2700) {
         return 2;  // Huawei快充
     }
 
@@ -645,21 +660,6 @@ void TFT_ShowTestResult(test_result_t *result, display_mode_t mode)
             TFT_DrawString_Font(69, 5, " m", COLOR_WHITE, COLOR_BLACK, FONT_12x24);
         }
 
-        // 快充类型（右上角小字显示）
-        const char *charge_type = "None";
-        uint16_t charge_color = COLOR_GRAY;
-        switch (result->fast_charge) {
-        case 1:
-            charge_type = "VOOC";
-            charge_color = COLOR_YELLOW;
-            break;
-        case 2:
-            charge_type = "Huawei";
-            charge_color = COLOR_MAGENTA;
-            break;
-        }
-        TFT_DrawString_Font(110, 2, charge_type, charge_color, COLOR_BLACK, FONT_5x7);
-
         // 通断测试（紧凑显示，用颜色直接表示状态）
         // 第一行：D+- CC1/CC2 SBU SHLD
         // 第二行：TX1 RX1 TX2 RX2 SBU
@@ -705,6 +705,21 @@ void TFT_ShowTestResult(test_result_t *result, display_mode_t mode)
         TFT_DrawString_Font(x_pos, y_line2, "RX2",
                              result->rx2_ok ? COLOR_GREEN : COLOR_RED, COLOR_BLACK, FONT_5x7);
         x_pos += 22;
+
+        // 快充类型（左下角小字显示）
+        const char *charge_type = "          ";
+        uint16_t charge_color = COLOR_GRAY;
+        switch (result->fast_charge) {
+        case 1:
+            charge_type = "Huawei 5A";
+            charge_color = COLOR_YELLOW;
+            break;
+        case 2:
+            charge_type = "Huawei 5A";
+            charge_color = COLOR_MAGENTA;
+            break;
+        }
+        TFT_DrawString_Font(0, 65, charge_type, charge_color, COLOR_BLACK, FONT_5x7);
 
         // 显示帧率（右下角）
         sprintf(buf, "%dFPS", current_fps);

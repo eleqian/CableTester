@@ -59,13 +59,13 @@ void GPIO_Configuration(void)
     GPIO_Init(GPIOB, &GPIO_InitStructure);
 
     /* USB-A接口 (USB2) 信号线配置 */
-    // AUX_G - 浮空输入（VOOC快充检测）
-    GPIO_InitStructure.GPIO_Pin = USB2_AUX_G_PIN;
+    // CC_R - 初始为浮空输入，后续可通过CC_R_Set_Pull_Mode()动态控制
+    GPIO_InitStructure.GPIO_Pin = CC_R_PIN;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
     GPIO_Init(GPIOB, &GPIO_InitStructure);
 
     /* Type-C接口2 (USB4) 信号线配置 */
-    // CC_E - 悬空输入，避免干扰CC1/CC2
+    // CC_E - 浮空输入，不使用内置上下拉电阻，由外部5.1k电阻通过CC_R控制
     GPIO_InitStructure.GPIO_Pin = USB4_CC_E_PIN;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
     GPIO_Init(GPIOA, &GPIO_InitStructure);
@@ -148,5 +148,35 @@ signal_status_t Test_Signal_Connection(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin)
         return SIGNAL_CONNECTED;
     } else {
         return SIGNAL_OPEN;
+    }
+}
+
+/**
+ * @brief  设置CC_R输出状态以控制CC_E外部电阻
+ * @param  mode: CC_R控制模式 (CC_R_PULL_UP/CC_R_PULL_DOWN/CC_R_FLOATING)
+ * @note   CC_R通过5.1k电阻连接到CC_E，控制CC_E的上拉/下拉
+ * @return none
+ */
+void CC_R_Set_Pull_Mode(uint8_t mode)
+{
+    GPIO_InitTypeDef GPIO_InitStructure = {0};
+
+    if (mode == CC_R_FLOATING) {
+        // CC_R浮空输入，CC_E无外部电阻
+        GPIO_InitStructure.GPIO_Pin = CC_R_PIN;
+        GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+        GPIO_Init(GPIOB, &GPIO_InitStructure);
+    } else {
+        // CC_R推挽输出，控制外部5.1k电阻
+        GPIO_InitStructure.GPIO_Pin = CC_R_PIN;
+        GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+        GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+        GPIO_Init(GPIOB, &GPIO_InitStructure);
+
+        if (mode == CC_R_PULL_UP) {
+            GPIO_SetBits(GPIOB, CC_R_PIN);   // 输出高电平，上拉CC_E
+        } else {
+            GPIO_ResetBits(GPIOB, CC_R_PIN); // 输出低电平，下拉CC_E
+        }
     }
 }

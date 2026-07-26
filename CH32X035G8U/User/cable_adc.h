@@ -17,6 +17,7 @@ extern "C" {
 
 /* ADC通道定义 */
 #define ADC_CHANNEL_V_PWR ADC_Channel_8  // PB0 - 电压检测
+#define ADC_CHANNEL_CC_E  ADC_Channel_1  // PA1 - CC_E电压检测（用于华为充电线检测）
 
 /* ADC分辨率 */
 #define ADC_RESOLUTION 4095  // 12位ADC
