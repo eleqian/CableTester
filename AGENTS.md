@@ -25,13 +25,13 @@ CH32X035G8U/
 ├── Debug/debug.c                 # printf over USART
 ├── User/                         # Application code (the code you should edit)
 │   ├── main.c                    # SysTick (1ms), init sequence, main loop
-│   ├── cable_gpio.c/h            # Pin config, V_PWR_EN, VCONN control (PC0/PC3)
-│   ├── cable_adc.c/h             # ADC read, averaging, single-channel only
-│   ├── cable_spi.c/h             # Software SPI for TFT (CPOL=High, CPHA=2Edge)
-│   ├── cable_tft.c/h             # ST7735S 160×80 driver, RGB565
-│   ├── cable_test.c/h            # Test state machine, key scan, display modes, results struct
+│   ├── cable_gpio.c/h            # Pin config, V_PWR_EN(PB6), VCONN(PC3/PC0), CC_E1/CC_E2(PA2/PA1)
+│   ├── cable_adc.c/h             # Dual-channel ADC, auto-switch thresholds
+│   ├── cable_spi.c/h             # Hardware SPI1 for TFT (CPOL=High, CPHA=2Edge, 12MHz)
+│   ├── cable_tft.c/h             # ST7735S 160×80 driver, RGB565, RST via hardware RC
+│   ├── cable_test.c/h            # Test state machine, key scan, dual-mode display
 │   ├── emarker_pd.c/h            # USB PD protocol for E-Mark communication
-│   ├── cable_font.c/h            # Font data for TFT
+│   ├── cable_font.c/h            # Font data for TFT (5×7, 8×16)
 │   ├── ch32x035_conf.h           # Peripheral HAL include aggregator
 │   └── ch32x035_it.c/h           # Interrupt handlers (SysTick increments system_tick_ms)
 └── Ld/Link.ld                    # Linker script
@@ -43,17 +43,25 @@ CH32X035G8U/
 - **Two display modes only** (V3.0): `MODE_CONTINUITY` (shows continuity + resistance + fast charge on one screen) and `MODE_EMARK` (shows E-Mark info).
 - **Resistance measurement**: 100Ω series resistor @ 3.3V → ~33mA through VBUS/GND loop. Two ADC channels: V_PWR_L (PB0, op-amp 101x non-inverting, gain=1+10k/100) for <1Ω, V_PWR_H (PB1, direct) for up to 100Ω. Auto-switch at ~900mΩ (V_PWR_L adc > 3686) with hysteresis. Range ≤1Ω (resolution ~0.24mΩ) or ≤100Ω (resolution ~24mΩ). Measurement active ~55ms per 1s cycle.
 - **VCONN / PD channel relationship** (critical): VCONN is driven on **auxiliary CC GPIO pins** (PC3 for CC1, PC0 for CC2). USBPD hardware uses dedicated pins (PC14 for CC1, PC15 for CC2). If E-Mark is on CC1, VCONN goes on PC3 and PD communication uses CC2 (PC15). This is an inverse relationship.
-- **CC_E1/CC_E2 (PA2/PA1)**: Right-port CC pins, coupled by 5.1kΩ. **Must be floating during E-Marker PD communication** to avoid loading USBPD pins. During CC continuity test: both driven low (combined CC test). During Huawei fast-charge detect: PA2=high, PA1=ADC (5.1k acts as pull-up). No CC_R pin anymore.
+- **CC_E1/CC_E2 (PA2/PA1)**: Right-port CC pins, coupled by 5.1kΩ. **Must be floating during E-Marker PD communication** to avoid loading USBPD pins. During CC continuity test: both driven low (combined CC test — 5.1k coupling prevents per-pin resolution). During Huawei fast-charge detect: PA2=high, PA1=ADC (5.1k between them acts as pull-up). No CC_R pin anymore.
+- **Open-circuit detection**: When V_PWR_L saturates (ADC ≥ 4094) → switch to V_PWR_H. If V_PWR_H also saturates → both channels at rail → cable open → return RES_SATURATED (100001 mΩ) → `power_ok=0` → display shows "OL".
+- **Per-cycle channel reset**: `use_v_pwr_l_channel` is reset to 1 at the start of each measurement cycle. Once switched to V_PWR_H mid-cycle, all remaining samples use V_PWR_H (no mixing of gain=101 and gain=1 readings in the same average).
 
 ## Documentation (repo-specific, not generic)
 
-- `doc/CableTester_Design.md` — system design document
+- `doc/CableTester_Design.md` — system design document (only kept design doc; includes USBPD appendix with VDM Header/Cable VDO1/GoodCRC bitfields)
 - `EVT/EXAM/` — WCH official peripheral examples (ADC, SPI, USB, etc.)
 - `doc/CH32X035DS0.PDF` & `doc/CH32X035RM.PDF` — MCU datasheet and reference manual
+- `doc/Netlist.asc` — circuit simulation netlist
+- `doc/pin_map.xlsx` — pin mapping spreadsheet
+- `doc/capture/` — PD decoder traces
+- `doc/pic/` — reference images
+- `README.md` (root) — overall function intro + usage instructions + troubleshooting
 
 ## Code style
 
 - Bilingual comments (Chinese + English). New code should follow this pattern.
+- Key design decisions must have a comment explaining **why** (not just what).
 - Module headers include `(C)` block, author `CableTester Team`, version and date.
 - Include guards: `__MODULENAME_H` (double underscore prefix).
 - `extern "C"` guards in all `.h` files.
