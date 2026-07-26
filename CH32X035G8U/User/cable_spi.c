@@ -7,7 +7,7 @@
 *********************************************************************************/
 
 #include "cable_spi.h"
-#include "cable_gpio.h"  // 包含TFT控制宏定义
+#include "cable_gpio.h"
 #include "debug.h"
 
 /**
@@ -48,7 +48,6 @@ void SPI_Configuration(void)
     /* 初始状态设置 */
     TFT_CS_HIGH();
     TFT_RS_HIGH();
-    TFT_RST_HIGH();
 }
 
 /**
@@ -89,30 +88,4 @@ void SPI_Write_Buffer(const uint8_t *data, uint32_t len)
 
     // 最后等待所有数据发送完成
     while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_BSY) == SET);
-}
-
-/**
- * @brief  TFT写入命令字节
- * @param  cmd: 命令字节
- * @return none
- */
-void TFT_Write_Command(uint8_t cmd)
-{
-    TFT_RS_LOW();      // RS=0: 命令模式
-    TFT_CS_LOW();      // CS=0: 使能片选
-    SPI_WriteByte(cmd);
-    TFT_CS_HIGH();     // CS=1: 禁用片选
-}
-
-/**
- * @brief  TFT写入数据字节
- * @param  data: 数据字节
- * @return none
- */
-void TFT_Write_Data(uint8_t data)
-{
-    TFT_RS_HIGH();     // RS=1: 数据模式
-    TFT_CS_LOW();      // CS=0: 使能片选
-    SPI_WriteByte(data);
-    TFT_CS_HIGH();     // CS=1: 禁用片选
 }

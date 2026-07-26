@@ -19,6 +19,7 @@
 | V1.6 | 2026-04-26 | Lingma | 优化MOS控制策略（100ms内连续测量） |
 | V1.7 | 2026-04-29 | Lingma | **重构为状态机架构，去除阻塞延时，修复SysTick配置** |
 | V1.8 | 2026-05-17 | Lingma | **硬件改动适配：参考电阻改为100Ω，AUX_G重命名为CC_R并实现外部电阻控制** |
+| V2.0 | 2026-07-26 | OpenCode | **硬件改动适配：参考电阻改为100Ω，运放增益101倍，取消CC_R，CC_E拆分为CC_E1/CC_E2** |
 
 ---
 
@@ -28,22 +29,19 @@
 CableTester是一款基于CH32X035G8U微控制器的USB线缆测试仪，用于检测USB线缆的通断性、电阻值、E-mark芯片信息及快充协议支持情况。
 
 ### 1.2 功能需求
-根据README.md描述，系统需要实现以下功能：
+系统需要实现以下功能：
 
 1. **供电管理**
    - 支持USB-C口供电
-   - 支持CR2032电池供电
-   - USB供电时自动断开电池
 
 2. **线缆通断测试**
    - 支持Type-C全信号测试（VBUS、GND、CC、SBU、D+、D-、TX1/2、RX1/2）
-   - LED指示各信号线通断状态
 
 3. **电源线阻测量**
    - 测量电源和地线总电阻
-   - 量程：0-1Ω
-   - 分辨率：1mΩ
-   - 采用恒流源环回法测量
+   - 量程：0-1Ω/1Ω-100Ω
+   - 分辨率：1mΩ/0.1Ω
+   - 采用参考电阻分压环回法测量
 
 4. **额外功能**
    - E-mark芯片检测（通过CC引脚1k下拉电阻）
@@ -63,13 +61,44 @@ CableTester是一款基于CH32X035G8U微控制器的USB线缆测试仪，用于�
 
 ### 2.2 引脚分配
 
+#### MCU引脚映射
+| 引脚编号 | 引脚名 | ADC | SYS | SPI  | USB | OPA       | 外设网络名 |
+|------|------|-----|-----|------|-----|-----------|----------|
+| 5    | PA0  | A0  | -   | -    | -   | -         | EH       |
+| 6    | PA1  | A1  | -   | -    | -   | O1N2/O2N2 | CC_E2    |
+| 7    | PA2  | A2  | -   | -    | -   | O2O1      | CC_E1    |
+| 8    | PA3  | A3  | -   | -    | -   | O1O0      | KEY_M    |
+| 9    | PA4  | A4  | -   | CS   | -   | O2O0      | TFT_CS   |
+| 10   | PA5  | A5  | -   | SCK  | -   | O2N0      | TFT_SCK  |
+| 11   | PA6  | A6  | -   | MISO | -   | O1N0      | TFT_RS   |
+| 12   | PA7  | A7  | -   | MOSI | -   | O2P0      | TFT_SDA  |
+| 13   | PB0  | A8  | -   | -    | -   | O1P0      | V_PWR_L  |
+| 16   | PB1  | A9  | -   | -    | -   | O2N1      | V_PWR_H  |
+| 14   | PB3  | -   | -   | -    | -   | O2P1      | UART_TX  |
+| 15   | PB4  | -   | -   | -    | -   | O1P2      | UART_RX  |
+| 17   | PB6  | -   | -   | -    | -   | O1N1      | V_PWR_EN |
+| 18   | PB7  | -   | RST | -    | -   | O2P2      | SBU      |
+| 19   | PB8  | -   | -   | -    | -   | O1P1      | RX2      |
+| 20   | PB9  | -   | MCO | -    | -   | -         | TX2      |
+| 21   | PB10 | -   | -   | -    | -   | -         | T_D      |
+| 22   | PB11 | -   | -   | -    | -   | -         | RX1      |
+| 23   | PB12 | -   | -   | -    | -   | -         | TX1      |
+| 3    | PC0  | A10 | -   | -    | -   | -         | CC2      |
+| 4    | PC3  | A13 | RST | -    | -   | -         | CC1      |
+| 28   | PC14 | -   | -   | CC1  | -   | -         | CC1      |
+| 1    | PC15 | -   | -   | CC2  | -   | -         | CC2      |
+| 26   | PC16 | -   | -   | -    | UDM | -         | UDM      |
+| 27   | PC17 | -   | -   | -    | UDP | -         | UDP      |
+| 25   | PC18 | -   | DIO | -    | -   | -         | DIO      |
+| 24   | PC19 | -   | DCK | -    | -   | -         | DCK      |
+
 #### Type-C接口1 (USB3 - 左侧测试口)
 
 | 信号 | MCU引脚 | 网络名 | 说明 |
 |------|---------|--------|------|
-| CC1 | PC3, PC14 | CC1 | CC1信号检测，PC3用于VCONN供电 |
-| CC2 | PC0, PC15 | CC2 | CC2信号检测，PC0用于VCONN供电 |
-| VBUS | - | V_TEST | 通过INA199放大后ADC测量 |
+| CC1 | PC3, PC14 | CC1 | PC3=VCONN供电，PC14=USBPD硬件通信（两端插时PA2经线缆直连此脚） |
+| CC2 | PC0, PC15 | CC2 | PC0=VCONN供电，PC15=USBPD硬件通信（两端插时PA1经线缆直连此脚） |
+| VBUS | PB1 | V_PWR_H | 测量电流输出，未经过放大的ADC测量信号 |
 | D+ | PB10 | T_D | USB数据正，D-接地 |
 | TX1 | PB12 | TX1 | USB3.0发送1，负端接地 |
 | TX2 | PB9 | TX2 | USB3.0发送2，负端接地 |
@@ -85,14 +114,15 @@ CableTester是一款基于CH32X035G8U微控制器的USB线缆测试仪，用于�
 | D+ | PB10 | T_D | 与Type-C D+共用，D-接地 |
 | TX1 | PB12 | TX1 | 与Type-C TX1共用，负端接地 |
 | RX1 | PB11 | RX1 | 与Type-C RX1共用，负端接地 |
-| CC_R | PB6 | CC_R | 通过5.1k电阻控制CC_E的上拉/下拉 |
+| VBUS | PB1 | V_PWR_H | 测量电流输出，未经过放大的ADC测量信号 |
 | GND | - | GND | 线缆GND |
 
 #### Type-C接口2 (USB4 - 右侧测试口)
 
 | 信号 | MCU引脚 | 网络名 | 说明 |
 |------|---------|--------|------|
-| CC_E | PA1 | CC_E | 外部5.1k电阻连接至CC_R，用于华为充电线检测和USBPD Rd电阻 |
+| CC1 | PA2 | CC_E1 | 与CC_E2经5.1kΩ耦合，E-Marker期间必须浮空；CC通断时推挽输出低；华为快充时推挽输出高作上拉 |
+| CC2 | PA1 | CC_E2 | 与CC_E1经5.1kΩ耦合，E-Marker期间必须浮空；CC通断时推挽输出低；华为快充时ADC输入测分压 |
 | EH | PA0 | EH | 屏蔽层检测 |
 | SHORT | - | SHORT | 所有VBUS/GND短接，用于测试线阻 |
 | - | - | - | TX1/TX2/RX1/RX2的正负信号分别短接，D+/D-短接，两个SBU短接 |
@@ -118,6 +148,18 @@ CableTester是一款基于CH32X035G8U微控制器的USB线缆测试仪，用于�
 | D- | PC16 | UDM | USB D- |
 | DIO | PC18 | DIO | 调试DIO |
 | DCK | PC19 | DCK | 调试DCK |
+| VBUS | - | - | 5V电源输入 |
+| GND | - | GND | GND |
+
+#### UART通信接口
+
+预留扩展串口，连接UART_TX/UART_RX；
+| 信号 | MCU引脚 | 网络名 | 说明 |
+|------|---------|--------|------|
+| TX | PB3 | UART_TX | 串口发送 |
+| RX | PB4 | UART_RX | 串口接收 |
+| VCC | - | - | 3.3V电源输出 |
+| GND | - | GND | GND |
 
 #### TFT显示屏 (ST7735S - 硬件SPI1)
 
@@ -127,75 +169,117 @@ CableTester是一款基于CH32X035G8U微控制器的USB线缆测试仪，用于�
 | RS/DC | PA6 | TFT_RS | 数据/命令选择（软件控制） |
 | SCK | PA5 | TFT_SCK | SPI时钟（硬件SPI1_SCK） |
 | MOSI | PA7 | TFT_SDA | SPI数据（硬件SPI1_MOSI） |
-| RST | PA3 | TFT_RST | 复位（软件控制） |
+| RST | - | - | 复位（硬件RC电路） |
 
 **注意**:
 - SCK和MOSI使用硬件SPI1专用引脚，配置为复用功能
-- CS、RS、RST由普通GPIO控制
+- CS、RS由普通GPIO控制
+- RST为硬件RC电路复位，无软件控制
+
+**字体系统**：
+- 支持5×7和8×16两种点阵字体
+- 5×7：紧凑显示，适合小屏幕和普通文本
+- 8×16：清晰易读，适合标题和重要信息
+- 字体数据以C数组形式存储在`cable_font.c/h`中，定义字形表（Fontx5x7/8x16）
+- 渲染通过`TFT_DrawString_Font()`函数实现，支持指定位置、颜色、背景色和字体尺寸
 
 #### 按键
 
 | 信号 | MCU引脚 | 网络名 | 说明 |
 |------|---------|--------|------|
-| KEY | PA2 | KEY_M | 功能切换按键（上拉输入） |
+| KEY | PA3 | KEY_M | 功能切换按键（上拉输入） |
 
 #### 电源控制
 
 | 信号 | MCU引脚 | 网络名 | 说明 |
 |------|---------|--------|------|
-| V_PWR_EN | PB1 | V_PWR_EN | 测试电源使能（PMOS低电平使能） |
-| V_PWR | PB0 | V_PWR | INA199输出（ADC_Channel_8） |
+| V_PWR_EN | PB6 | V_PWR_EN | 测试电源使能（PMOS低电平使能），串联100欧参考电阻，再经过USB座和线缆接地，分压法测量电阻 |
+| V_PWR_L | PB0 | V_PWR_L | 经过101倍放大的分压测量（ADC_Channel_8），用于测量较小的电阻（小于1欧姆） |
+| V_PWR_H | PB1 | V_PWR_H | 未经过放大的分压测量（ADC_Channel_9），用于测量较大的电阻（超过V_PWR_L量程时使用） |
 
 ### 2.3 关键电路
 
 #### 2.3.1 电阻测量电路
 
+采用通用运放同向放大，同时提供放大和未放大两路ADC测量通道，根据测量值自动切换挡位。
+
+**放大通道（V_PWR_L, PB0, ADC_Channel_8）：**
+
 ```
 V_TEST (3.3V) -> R5 (100Ω) -> 线缆VBUS -> 线缆GND -> 短接回路 -> GND
                               |
-                              +-> INA199A1 (+IN, -IN)
+                              +-> 运放同相输入端 (+)
                                       |
-                                      +-> OUT (50x增益) -> R (10kΩ) -> ADC (PB0)
-                                                          |
-                                                          +-> C (0.1μF) -> GND
+                                      运放增益 = 1 + Rf / Rg = 1 + 10kΩ / 100Ω = 101
+                                      |
+                              +-> 运放输出 -> R (10kΩ) -> C (0.1μF) -> GND
+                              |                              |
+                              |                              +-> ADC (PB0, V_PWR_L)
+                              |
+                              +-> 直接连接 -> R (10kΩ) -> C (0.1μF) -> GND
+                                                                            |
+                                                                            +-> ADC (PB1, V_PWR_H)
 ```
 
-**RC低通滤波器：**
+**未放大通道（V_PWR_H, PB1, ADC_Channel_9）：**
+- VBUS信号直接经RC滤波后进入ADC，用于测量较大电阻（超过V_PWR_L有效量程时使用）
+
+**RC低通滤波器（两通道共用10kΩ+0.1μF）：**
 - R = 10kΩ, C = 0.1μF
 - 时间常数 τ = R × C = 1ms
 - 稳定时间：5τ = 5ms（达到99.3%稳定度）
 - 作用：滤除高频噪声，提高测量稳定性
 
+**挡位切换策略**：
+
+V_PWR_L（放大通道，增益101）有效线性范围上限约900mΩ，此时ADC读数约3686（满量程的90%）。超过此点后接近饱和，改用V_PWR_H（未放大通道）测量。
+
+| 条件 | 使用通道 | 量程 | 分辨率 |
+|------|---------|------|--------|
+| R < 900 mΩ（V_PWR_L adc < 3686） | V_PWR_L（放大101倍） | 0 ~ 900 mΩ | ~0.24 mΩ |
+| R ≥ 900 mΩ（V_PWR_L adc ≥ 3686） | V_PWR_H（未放大） | 900 mΩ ~ 100 Ω | ~24 mΩ |
+
+切换带回差：当V_PWR_L adc > 3686（≈900mΩ）时切至V_PWR_H；当V_PWR_H adc < 33（≈800mΩ）时切回V_PWR_L，避免临界区频繁跳变。
+
 **计算公式（整数运算）**：
+
+放大通道（V_PWR_L，R < 900mΩ）：
 ```
-R_mohm = adc_value × SERIES_RESISTOR / (INA199_GAIN × ADC_RESOLUTION - adc_value)
-其中：SERIES_RESISTOR = 100000 mΩ, INA199_GAIN = 100, ADC_RESOLUTION = 4095
+R_mohm = adc_value × SERIES_RESISTOR / (OPAMP_GAIN × ADC_RESOLUTION - adc_value)
+其中：SERIES_RESISTOR = 100000 mΩ, OPAMP_GAIN = 101, ADC_RESOLUTION = 4095
 ```
 
-**推导过程**：
+未放大通道（V_PWR_H，R ≥ 900mΩ）：
+```
+R_mohm = adc_value × SERIES_RESISTOR / (ADC_RESOLUTION - adc_value)
+其中：SERIES_RESISTOR = 100000 mΩ, ADC_RESOLUTION = 4095
+```
+
+**推导过程（放大通道）**：
 - VBUS电压 V_vbus(mV) = VREF × R_cable / (SERIES_RESISTOR + R_cable)
-- INA199放大后：V_amp(mV) = V_vbus(mV) × INA199_GAIN
+- 运放放大后：V_amp(mV) = V_vbus(mV) × OPAMP_GAIN
 - ADC转换：adc_value = V_amp(mV) / VREF(mV) × ADC_RESOLUTION
-- 反推电阻：R_cable(mΩ) = adc_value × SERIES_RESISTOR / (INA199_GAIN × ADC_RESOLUTION - adc_value)
+- 反推电阻：R_cable(mΩ) = adc_value × SERIES_RESISTOR / (OPAMP_GAIN × ADC_RESOLUTION - adc_value)
 
 **技术参数**：
-- 量程：0-1000 mΩ
-- 分辨率：约0.24 mΩ
+- V_PWR_L量程：0-900 mΩ（分辨率约0.24 mΩ）
+- V_PWR_H量程：900 mΩ - 100 Ω（分辨率约24 mΩ）
+- 挡位切换点：900 mΩ（带回差）
 - 精度：< ±2%
-- **测量周期：1秒（开启100ms，关闭900ms，占空比10%）**
+- **测量周期：1秒（开启55ms，关闭945ms，占空比~5.5%）**
 - **RC稳定时间：5ms**
 
 #### 2.3.2 电源控制电路
 
 ```
-V_PWR_EN (PB1) -> Q1栅极 (PMOS场效应管) -> V_TEST输出3.3V
+V_PWR_EN (PB6) -> Q1栅极 (PMOS场效应管) -> V_TEST输出3.3V
 ```
 
 **工作原理**：
 - 采用PMOS作为开关（低电平使能，高电平关闭）
-- 每1秒开启100ms以降低功耗（占空比10%）
-- 初始状态：PB1输出高电平（PMOS关闭）
-- 使能状态：PB1输出低电平（PMOS导通）
+- 每1秒开启约55ms以降低功耗（占空比~5.5%）
+- 初始状态：PB6输出高电平（PMOS关闭）
+- 使能状态：PB6输出低电平（PMOS导通）
 
 **优势**：
 - PMOS导通电阻小，压降低
@@ -210,57 +294,61 @@ CC1/CC2 -> Type-C CC引脚
               +-> 1kΩ下拉电阻 (存在E-mark时)
 
 检测到E-mark后：
-CC1_AUX (PC14) + CC2_AUX (PC15) -> 并联输出3.3V -> VCONN供电
+CC1_AUX (PC3) + CC2_AUX (PC0) -> 并联输出3.3V -> VCONN供电
 ```
 
 **工作流程**：
 1. 配置CC1或CC2为上拉输入
 2. 读取引脚电平
 3. 如果为低电平，说明存在1k下拉电阻（E-mark芯片）
-4. 检测到E-mark后，通过PC14和PC15并联输出VCONN供电
-5. 在另一个CC引脚进行PD协议通信（可选扩展）
+4. 检测到E-mark后，通过PC3和PC0并联输出VCONN供电（详见2.3.3.1）
+5. 在另一个CC引脚进行PD协议通信（PC14/PC15 USBPD硬件模块）
 
 **技术要点**：
-- CC_E (PA1) 保持浮空输入，不使用内置上下拉电阻
-- 使用2个GPIO并联提供足够驱动能力（约40mA）
+- CC_E1 (PA2) 和 CC_E2 (PA1) 在E-Marker检测和PD通信期间必须保持浮空输入，避免5.1k电阻影响USBPD引脚电平
+- VCONN使用2个GPIO（PC3/PC0）并联提供足够驱动能力（约40mA）
 - E-mark芯片通常需要<5mA，足够使用
 
-#### 2.3.3.1 CC_R/CC_E外部电阻控制电路
+#### 2.3.3.1 CC_E1/CC_E2控制与测试方案
 
+CC_E1 (PA2) 和 CC_E2 (PA1) 之间通过 5.1kΩ 电阻耦合，用于右口的CC信号回路和华为快充检测。**已取消独立的CC_R引脚**，通过PA1/PA2直接驱动控制。
+
+**电路连接**：
 ```
-CC_R (PB6) --[5.1k]--> CC_E (PA1)
-
-CC_R输出高电平时：CC_E被上拉到3.3V（通过5.1k）
-CC_R输出低电平时：CC_E被下拉到GND（通过5.1k）
-CC_R浮空时：CC_E无外部电阻，保持浮空
+PA2 (CC_E1) ──[5.1kΩ]── PA1 (CC_E2)
 ```
 
-**功能说明**：
-1. **华为充电线检测**：
-   - CC_R输出高电平，通过5.1k上拉CC_E
-   - 华为充电线在CC引脚有56k电阻连接VBUS
-   - VBUS已短接到GND，相当于56k下拉
-   - 形成分压电路，测量CC_E电压判断是否存在华为充电线
+**各测试模式下的引脚状态**：
 
-   **计算公式**：
-   ```
-   V_cc_e = 3.3V × R_huawei / (5.1k + R_huawei)
+| 测试模式 | PA2(CC_E1) | PA1(CC_E2) | 说明 |
+|---------|-----------|-----------|------|
+| E-Marker PD通信 | 浮空输入 | 浮空输入 | 两端插时PA2经线缆直连PC14，必须高阻避免影响BMC |
+| CC通断测试 | 推挽输出低 | 推挽输出低 | 右口CC被拉到GND，左口CC读电平判断 |
+| 华为快充检测 | 推挽输出高(3.3V) | ADC输入 | 5.1k自然形成上拉，分压测华为56k |
+| 电阻测量 | 浮空输入 | 浮空输入 | 走PB0/PB1通道，与CC无关 |
 
-   典型值：
-   - 单CC脚(56k)：V ≈ 3.0V
-   - 双CC脚并联(28k)：V ≈ 2.8V
-   - 无充电线(开路)：V ≈ 3.3V
-   ```
+**CC通断测试**（合并检测）：
+```
+① PA1=PA2=推挽输出低
+② 左口CC1(PC3)/CC2(PC0)保持上拉输入
+③ 读PC3/PC0电平：
+   - 任一为低 → CC OK（至少一根CC线连通）
+   - 均为高 → CC OPEN
+```
+注：PA1↔PA2间5.1k耦合导致无法独立分辨CC1/CC2，Type-C正反插本来就只通一根CC，合并检测即可。
 
-2. **USBPD Rd电阻提供**：
-   - CC_R输出低电平，通过5.1k下拉CC_E
-   - 用于通断测试中作为CC信号的回路
-   - 模拟USBPD协议中的Rd下拉电阻
-
-**控制函数**：
-```c
-void CC_R_Set_Pull_Mode(uint8_t mode);
-// mode: CC_R_PULL_UP (上拉), CC_R_PULL_DOWN (下拉), CC_R_FLOATING (浮空)
+**华为充电线检测**：
+```
+① PA2=推挽输出高(3.3V)，PA1=ADC输入
+② 5.1kΩ（PA2→PA1）自然形成上拉
+③ 华为线CC脚56k→右口短接GND，形成分压
+④ ADC读PA1电压判断
+```
+计算公式：
+```
+V_pa1 = 3.3V × 56k / (5.1k + 56k) ≈ 3.0V（单CC脚）
+V_pa1 = 3.3V × 28k / (5.1k + 28k) ≈ 2.8V（双CC脚并联）
+V_pa1 ≈ 3.3V（无华为线，开路）
 ```
 
 #### 2.3.4 TFT显示电路（硬件SPI1）
@@ -271,7 +359,7 @@ PA5 (SPI1_SCK)    ->     SCK
 PA7 (SPI1_MOSI)   ->     SDA/MOSI
 PA4 (GPIO)        ->     CS
 PA6 (GPIO)        ->     RS/DC
-PA3 (GPIO)        ->     RST
+(硬件RC复位)      ->     RST
 ```
 
 **SPI1配置参数**：
@@ -340,24 +428,27 @@ PA3 (GPIO)        ->     RST
 **主要函数**：
 ```c
 void GPIO_Configuration(void);
-void Set_Test_Voltage_Enable(uint8_t enable);  // PMOS控制
+void Set_Test_Voltage_Enable(uint8_t enable);  // PMOS控制(PB6)
 uint8_t Read_Key_State(void);
 signal_status_t Test_Signal_Connection(GPIO_TypeDef* GPIOx, uint16_t GPIO_Pin);
-uint8_t Detect_Emark_Chip(void);
-void Enable_VCONN_Power(uint8_t enable);
-uint8_t Detect_Fast_Charge_Type(void);
+void Enable_VCONN_Power(uint8_t enable);       // PC3/PC0并联
+void CC_E_Set_Output_Low(void);                // PA1/PA2推挽输出低（CC通断测试）
+void CC_E_Set_Floating(void);                  // PA1/PA2恢复浮空输入
 ```
 
 **关键技术**：
-- PMOS控制：低电平使能，高电平关闭
-- E-mark检测：CC1/CC2上拉输入检测1k下拉电阻
-- VCONN供电：PC14和PC15并联输出提高驱动能力
+- PMOS控制（PB6）：低电平使能，高电平关闭
+- VCONN供电（PC3/PC0）：并联输出，提供E-mark芯片电源
+- CC通断：PA1/PA2推挽输出低，合并检测CC1/CC2连通性
+- 华为快充：PA2推挽高+PA1 ADC，利用5.1k自然上拉测分压
+- **E-Marker期间PA1/PA2必须浮空**，避免5.1k影响USBPD引脚
 
 #### 3.2.2 ADC模块 (cable_adc.c/h)
 
 **功能**：
 - 初始化ADC1
-- 读取V_PWR电压（PB0, ADC_Channel_8）
+- 双通道ADC采样：V_PWR_L（PB0, ADC_Channel_8, 101倍运放放大）和V_PWR_H（PB1, ADC_Channel_9, 未放大）
+- 自动挡位切换（V_PWR_L adc > 3686时切换到V_PWR_H）
 - 计算线缆电阻值（纯整数运算）
 
 **主要函数**：
@@ -365,23 +456,20 @@ uint8_t Detect_Fast_Charge_Type(void);
 void ADC_Configuration(void);
 uint16_t ADC_Read_Channel(uint8_t channel);
 uint16_t ADC_Average_Read(uint8_t channel, uint8_t times);
-uint32_t Calculate_Cable_Resistance(void);  // 返回毫欧(mΩ)
-uint16_t Read_Input_Voltage_mV(void);       // 返回毫伏(mV)
+uint32_t Calculate_Cable_Resistance(uint8_t channel);  // 指定通道计算电阻(mΩ)
+uint16_t Read_Input_Voltage_mV(void);                   // 返回毫伏(mV)
 ```
 
 **整数运算优化**：
-```c
-// 电阻计算公式（整数）
-R_mohm = (adc_value * 4990UL) / 20475UL;
+所有计算使用32位整数运算，无浮点依赖，代码体积减少约4KB。
 
-// 电压计算公式（整数）
-V_mV = (adc_value * 3300UL) / 4095UL;
-```
-
-**性能提升**：
-- 执行速度：提升20-50倍
-- 代码体积：减少约4KB（无需浮点库）
-- 精度保持：< 2%误差
+**关键参数**：
+- 运放增益：101倍（同相放大，1+10kΩ/100Ω）
+- 串联参考电阻：100Ω
+- ADC分辨率：12位 (4095)
+- 参考电压：3.3V
+- V_PWR_L量程：0~900mΩ（分辨率~0.24mΩ）
+- V_PWR_H量程：900mΩ~100Ω（分辨率~24mΩ）
 
 #### 3.2.3 SPI模块 (cable_spi.c/h)
 
@@ -419,11 +507,9 @@ void TFT_ShowTestResult(test_result_t *result, display_mode_t mode);
 void TFT_ShowWelcome(void);
 ```
 
-**显示模式**：
-1. MODE_CONTINUITY - 通断测试
-2. MODE_RESISTANCE - 电阻测量
-3. MODE_EMARK - E-mark信息
-4. MODE_FAST_CHARGE - 快充识别
+**显示模式（V3.0）**：
+1. MODE_CONTINUITY - 通断测试+电阻值+快充识别，合并显示在同一页面
+2. MODE_EMARK - E-mark信息（通过USB PD协议读取详细信息）
 
 **数据结构**（整数类型）：
 ```c
@@ -474,6 +560,40 @@ void Run_Full_Test(test_result_t *result);
 - 状态机管理按键状态（空闲/等待释放）
 - **无阻塞延时**，立即响应
 - 消抖时间：20ms（通过时间戳差值判断）
+
+#### 3.2.7 E-Mark PD通信模块 (emarker_pd.c/h)
+
+**功能**：
+- 自动检测E-Mark芯片存在性
+- 通过USB PD协议发送Discover Identity命令
+- 接收并解析VDM响应，提取线缆详细信息
+- VCONN电源自动控制
+- 多CC通道自动选择（CC1/CC2）
+
+**数据结构**：
+```c
+typedef struct {
+    uint8_t  valid;
+    uint32_t vdm_header;
+    uint32_t id_header;
+    uint32_t cable_vdo1;
+    uint8_t  cable_type;         // 0-被动, 1-主动
+    uint8_t  usb_speed;          // USB速度等级
+    uint8_t  current_capability; // 电流能力（3A/5A）
+    uint8_t  epr_capable;        // EPR支持
+    uint16_t vendor_id;
+    uint16_t product_id;
+} emarker_info_t;
+```
+
+**PD通信步骤**：
+1. 检测E-Mark所在CC通道 → 确定VCONN供电和PD通信通道（逆关系）
+2. 使能VCONN供电（PC3或PC0），等待50ms稳定
+3. 在PD通信CC线上配置Rp上拉（CC_PU_330）
+4. USBPD发送Discover Identity VDM命令（SOP'寻址Cable Plug）
+5. 接收GoodCRC，发送GoodCRC确认
+6. 接收VDM响应，解析Cable VDO1等数据
+7. 完成，关闭VCONN
 
 ### 3.3 工作流程（V1.7 状态机版本）
 
@@ -578,25 +698,78 @@ static uint32_t resistance_sum;
 
 #### 3.3.4 E-mark检测流程
 
+**前提条件**：CC_E1(PA2)和CC_E2(PA1)必须保持浮空输入，避免5.1k影响USBPD引脚电平。
+
 ```
-配置CC1为上拉输入
-    ↓
-读取CC1电平
-    ↓
-如果为低电平:
-    存在1k下拉电阻 -> 有E-mark
-    使能VCONN供电 (PC14+PC15并联输出)
-否则:
-    配置CC2为上拉输入
-    读取CC2电平
-    如果为低电平:
-        存在1k下拉电阻 -> 有E-mark
-        使能VCONN供电
-    否则:
-        无E-mark
+① 确保PA1=PA2=浮空输入
+
+② 通过USBPD硬件模块检测CC线上的Rd（1k下拉）
+   检测到E-mark后确定CC通道（CC1或CC2）
+
+③ 使能VCONN供电（逆关系）：
+   - E-mark在CC1 → VCONN经PC3供电，PD通信走CC2(PC15)
+   - E-mark在CC2 → VCONN经PC0供电，PD通信走CC1(PC14)
+   等待50ms让E-mark芯片上电稳定
+
+④ 在PD通信CC线上配置Rp上拉（CC_PU_330）
+   USBPD硬件模块发送Discover Identity VDM命令
+
+⑤ 接收GoodCRC和VDM响应
+   解析Cable VDO1等数据（线缆类型、速率、电流能力等）
+
+⑥ 测试完成，关闭VCONN，恢复CC引脚为浮空输入
 ```
 
-### 3.4 时序要求
+### 3.4 USBPD硬件控制
+
+#### 3.4.1 VCONN与PD通信通道关系
+
+USB Type-C规范要求VCONN供电与PD通信使用不同CC通道：
+
+```
+VCONN在CC1 → PD通信使用CC2（PC15）
+VCONN在CC2 → PD通信使用CC1（PC14）
+```
+
+VCONN经辅助GPIO（PC3或PC0）供电，PD通信走USBPD硬件引脚（PC14或PC15），形成逆关系。VCONN使能后需等待至少50ms，待E-Mark芯片上电稳定后再配置PD通信。
+
+#### 3.4.2 CC_LVE寄存器控制
+
+CH32X035 USBPD模块的CC端口有两种工作模式，由`CC_LVE`位控制：
+
+| CC_LVE | 模式 | 电平 | 用途 |
+|--------|------|------|------|
+| 0 | 恒流源上拉（接收） | ~1.68V（330μA×5.1k） | 等待响应、空闲态 |
+| 1 | 推挽输出（发送） | 3.3V/0V | BMC编码发送 |
+
+**控制流程**：发送前启用LVE（推挽输出），发送完成后立即禁用LVE（恢复恒流源），否则无法接收E-Mark响应。
+
+#### 3.4.3 BMC时序配置
+
+BMC编码时序关键参数（48MHz系统时钟）：
+
+```
+BMC_CLK_CNT = UPD_TMR_TX_48M = 0x0050 = 80
+UI时间 = (80 + 1) / 48MHz = 1.6875μs
+Bit时间 = 2 × UI = 3.375μs → 速率 ≈ 296kHz（在±10%范围内）
+```
+
+**接收流程**：
+1. 清除USBPD接收状态（`IF_RX_ACT`等标志）
+2. 设置DMA缓冲区地址（`USBPD->DMA`）
+3. 启动BMC接收（`USBPD->CONTROL |= BMC_START`）
+4. 等待`IF_RX_ACT`标志（超时保护）
+
+**常见问题**：
+
+| 现象 | 原因 | 解决 |
+|------|------|------|
+| IF_RX_ACT不触发 | CC_LVE发送后未禁用 | 发送后清除CC_LVE |
+| IF_RX_ACT不触发 | USBPD模块未复位 | 用PD_ALL_CLR复位 |
+| IF_RX_ACT不触发 | DMA缓冲区未设置 | 设置USBPD->DMA |
+| BMC速率偏差 | BMC_CLK_CNT配置错误 | 使用UPD_TMR_TX_48M |
+
+### 3.5 时序要求
 
 1. **电阻测量时序**
    - V_PWR_EN开启后延时5ms等待RC滤波稳定（5τ）
@@ -622,47 +795,24 @@ static uint32_t resistance_sum;
 **公式推导**：
 ```
 原始公式：
-V_adc = adc_value × VREF / 4095
-V_sense = V_adc / GAIN
-I = VREF / R_series
-R_cable = V_sense / I
+V_vbus(mV) = VREF × R_cable / (SERIES_RESISTOR + R_cable)
+V_amp(mV) = V_vbus(mV) × OPAMP_GAIN
+adc_value = V_amp(mV) / VREF(mV) × ADC_RESOLUTION
 
-合并简化：
-R_cable = (adc_value × VREF / 4095 / GAIN) / (VREF / R_series)
-        = adc_value × R_series / (4095 × GAIN)
+合并推导（放大通道）：
+adc_value = R_cable × OPAMP_GAIN × ADC_RESOLUTION / (SERIES_RESISTOR + R_cable)
+
+求解 R_cable（放大通道）：
+R_cable = adc_value × SERIES_RESISTOR / (OPAMP_GAIN × ADC_RESOLUTION - adc_value)
 
 代入数值：
-R_cable = adc_value × 49.9 / (4095 × 50)
-        = adc_value × 49.9 / 204750
+SERIES_RESISTOR = 100000 mΩ
+OPAMP_GAIN = 101（运放同向放大，增益 = 1 + 10kΩ / 100Ω = 101）
+ADC_RESOLUTION = 4095
+R_cable(mΩ) = adc_value × 100000 / (101 × 4095 - adc_value)
 
-转换为毫欧：
-R_mohm = adc_value × 49.9 × 1000 / 204750
-       = adc_value × 49900 / 204750
-       = adc_value × 4990 / 20475
-```
-
-**代码实现**：
-``c
-uint32_t Calculate_Cable_Resistance(void)
-{
-    uint16_t adc_value;
-    uint32_t resistance_mohm;
-
-    // 使能测试电压
-    Set_Test_Voltage_Enable(1);
-    Delay_Ms(1);
-
-    // 读取ADC值（10次平均）
-    adc_value = ADC_Average_Read(ADC_CHANNEL_V_PWR, 10);
-
-    // 关闭测试电压
-    Set_Test_Voltage_Enable(0);
-
-    // 整数运算计算电阻（毫欧）
-    resistance_mohm = ((uint32_t)adc_value * 4990UL) / 20475UL;
-
-    return resistance_mohm;
-}
+未放大通道（OPAMP_GAIN = 1）：
+R_cable(mΩ) = adc_value × 100000 / (4095 - adc_value)
 ```
 
 **性能分析**：
@@ -735,12 +885,13 @@ void Test_Cable_Resistance(test_result_t *result)
 
 | 指标 | 要求 | 实际 | 状态 |
 |------|------|------|------|
-| 电阻测量范围 | 0-1000mΩ | 0-1000mΩ | ✅ 达成 |
-| 电阻测量分辨率 | 1mΩ | 0.24mΩ | ✅ 超额 |
+| 电阻测量范围 | ≤1Ω / ≤100Ω | 0-900mΩ(V_PWR_L) / 900mΩ-100Ω(V_PWR_H) | ✅ 达成 |
+| 电阻测量分辨率 | 1mΩ / 0.1Ω | 0.24mΩ(V_PWR_L) / 24mΩ(V_PWR_H) | ✅ 超额 |
 | 电阻测量精度 | ±5% | <±2% | ✅ 超额 |
+| 挡位切换点 | - | ~900mΩ（带≥10%回差） | ✅ 自动切换 |
 | 测量周期 | 1秒 | 1秒 | ✅ 达成 |
 | **RC稳定时间** | - | **5ms (5τ)** | ✅ **优化** |
-| **测量占空比** | - | **10% (100ms/1s)** | ✅ **低功耗** |
+| **测量占空比** | - | **~5.5% (55ms/1s)** | ✅ **低功耗** |
 | 单次计算耗时 | - | ~15-35 cycles | ✅ 优秀 |
 
 ### 6.2 显示性能
@@ -872,9 +1023,13 @@ void Delay_Ms(uint32_t n)
    - 检测后必须恢复浮空输入
    - 避免影响正常CC通信
 
-4. **VCONN供电能力**
-   - 2个GPIO并联约40mA
-   - E-mark芯片通常<5mA，足够使用
+4. **VCONN供电引脚**
+   - VCONN由PC3(CC1)和PC0(CC2)提供，非PC14/PC15（USBPD硬件引脚）
+   - 2个GPIO并联约40mA，E-mark芯片通常<5mA，足够使用
+
+5. **CC_E1/CC_E2浮空要求**
+   - E-Marker PD通信期间，PA1(CC_E2)和PA2(CC_E1)必须为浮空输入
+   - 两端插线缆时PA2经线缆CC1直连PC14(USBPD_CC1)，5.1k负载会破坏Rp/Rd分压
 
 ### 8.2 软件相关
 
@@ -926,10 +1081,72 @@ void Delay_Ms(uint32_t n)
 
 ## 10. 相关文档
 
-- **快速开始指南**: `doc/快速开始指南.md`
-- **代码使用说明**: `CH32X035G8U/User/README_Code.md`
-- **项目开发总结**: `doc/项目开发总结.md`
-- **项目交付清单**: `doc/项目交付清单.md`
+- **CH32X035数据手册**: `doc/CH32X035DS0.PDF`
+- **CH32X035参考手册**: `doc/CH32X035RM.PDF`
+- **USB PD 规范**: `doc/USB_PD_R3.2_V1.2_2026_03_17.pdf`
+
+---
+
+# 附录A：USB PD协议位域定义
+
+## A.1 Structured VDM Header（32位）
+
+```
+MSB                                                                  LSB
+┌──────────────────┬─────┬──────┬──────┬────────┬──────┬───┬────────┐
+│     31:16        │  15 │14-13 │12-11 │ 10:8   │ 7:6  │ 5 │  4:0   │
+├──────────────────┼─────┼──────┼──────┼────────┼──────┼───┼────────┤
+│      SVID        │Type │ Ver  │ Rsvd │Obj Pos │CmdTyp│ R │ Command│
+└──────────────────┴─────┴──────┴──────┴────────┴──────┴───┴────────┘
+```
+
+| 位域 | 说明 | Discover Identity值 |
+|------|------|-------------------|
+| 31:16 | SVID（Standard/Vendor ID） | 0xFF00（USB-IF标准） |
+| 15 | VDM Type（1=Structured） | 1 |
+| 14:13 | VDM Version | 01（Version 2.0） |
+| 12:11 | Reserved | 0 |
+| 10:8 | Object Position | 1 |
+| 7:6 | Command Type | 01（Initiator） |
+| 5 | Reserved | 0 |
+| 4:0 | Command | 0x01（Discover Identity） |
+
+## A.2 Active Cable VDO1（32位）
+
+```
+MSB                                                                  LSB
+┌──────┬──────┬──────┬──────┬────────┬──────┬──────┬──────┬──────────┐
+│31:27 │ 26:24│23:21 │ 20:19│  18:16 │ 15:13│12:11 │ 10:9 │   8:0    │
+├──────┼──────┼──────┼──────┼────────┼──────┼──────┼──────┼──────────┤
+│Rsvd  │ SSID │Rsvd  │  Lkt │  SSIF  │ Rsvd │VBUS  │  VDO │ USB最高  │
+│      │      │      │      │        │      │Max   │Ver   │ 速度     │
+└──────┴──────┴──────┴──────┴────────┴──────┴──────┴──────┴──────────┘
+```
+
+| 位域 | 说明 | 典型值 |
+|------|------|--------|
+| 2:0 | USB最高速度 | 000=USB2.0, 001=USB3.2G1, 010=USB3.2G2, 011=USB4G3, 100=USB4G4 |
+| 10:9 | VDO版本 | 00=1.0, 01=2.0 |
+| 12:11 | VBUS Max | 00=VBUSonly, 01=3A, 10=5A |
+| 20:19 | 有源线缆类型 | 00=非EMCA, 01=EMCA |
+| 26:24 | SSID（两侧相同） | |
+
+## A.3 GoodCRC消息头
+
+GoodCRC是PD协议层的ACK确认，必须在收到消息后750μs（tReceive）内发送：
+
+```
+Header（16位）：
+┌──────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┐
+│15:12 │11:10 │  9:8 │   7  │  6:5 │  4:3 │  2:1 │   0  │
+├──────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
+│Rsvd  │Rsvd  │Port  │Rsvd  │MsgType│Rsvd  │MsgID │Rsvd  │
+│      │      │No    │      │       │      │      │      │
+└──────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┘
+```
+
+- Message Type = 0x01（GoodCRC）
+- Message ID = 与被确认消息的Message ID一致
 
 ---
 
@@ -940,6 +1157,7 @@ void Delay_Ms(uint32_t n)
 - ✅ PMOS电源控制和E-mark检测电路（V1.1）
 - ✅ 硬件SPI1驱动TFT（V1.2）
 - ✅ 纯整数运算优化（V1.3）
-- ✅ 参考电阻改为100Ω，AUX_G重命名为CC_R并实现外部电阻控制（V1.8）
+- ✅ 参考电阻改为100Ω，运放增益101倍（V1.8）
+- ✅ 取消CC_R引脚，CC_E拆分为CC_E1/CC_E2，直接GPIO驱动控制（V1.8）
 
 所有代码已通过编译检查，可以立即下载测试。

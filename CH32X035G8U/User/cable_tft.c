@@ -14,21 +14,53 @@
 #include <string.h>
 #include <stdio.h>
 
+/* SPI引脚定义 (使用硬件SPI1) */
+// TFT_CS   - PA4 (软件控制片选)
+// TFT_SCK  - PA5 (SPI1 SCK)
+// TFT_MOSI - PA7 (SPI1 MOSI)
+// TFT_RS   - PA6 (软件控制RS/DC)
+// TFT_RST  - 硬件RC电路复位，无软件控制
+
+/* 注意：TFT控制宏已在cable_gpio.h中定义 */
+
+/**
+ * @brief  TFT写入命令字节
+ * @param  cmd: 命令字节
+ * @return none
+ */
+void TFT_Write_Command(uint8_t cmd)
+{
+    TFT_RS_LOW();      // RS=0: 命令模式
+    TFT_CS_LOW();      // CS=0: 使能片选
+    SPI_WriteByte(cmd);
+    TFT_CS_HIGH();     // CS=1: 禁用片选
+}
+
+/**
+ * @brief  TFT写入数据字节
+ * @param  data: 数据字节
+ * @return none
+ */
+void TFT_Write_Data(uint8_t data)
+{
+    TFT_RS_HIGH();     // RS=1: 数据模式
+    TFT_CS_LOW();      // CS=0: 使能片选
+    SPI_WriteByte(data);
+    TFT_CS_HIGH();     // CS=1: 禁用片选
+}
+
 /**
  * @brief  TFT初始化
  * @return none
  */
 void TFT_Init(void)
 {
-    // 硬件复位
-    TFT_RST_LOW();
-    Delay_Ms(10);
-    TFT_RST_HIGH();
-    Delay_Ms(120);
+    // TFT_RST由硬件RC电路完成复位，无需软件控制
+    Delay_Ms(100);
 
     // ST7735S初始化序列
     TFT_Write_Command(0x11);  // SLPOUT - 退出睡眠模式
-    Delay_Ms(120);
+    Delay_Ms(100);
 
     TFT_Write_Command(0xB1);  // FRMCTR1 - 帧率控制
     TFT_Write_Data(0x01);
@@ -89,14 +121,10 @@ void TFT_Init(void)
     TFT_Write_Command(0x3A);  // COLMOD - 接口像素格式
     TFT_Write_Data(0x05);     // 16位/pixel
 
-    // 设置显示窗口 - 旋转后：宽160x高80
-    TFT_Set_Window(0, 0, TFT_WIDTH, TFT_HEIGHT);
-
-    TFT_Write_Command(0x29);  // DISPON - 打开显示
-    Delay_Ms(10);
-
     // 清屏
     TFT_Clear(COLOR_BLACK);
+
+    TFT_Write_Command(0x29);  // DISPON - 打开显示
 }
 
 /**
@@ -106,15 +134,7 @@ void TFT_Init(void)
  */
 void TFT_Clear(uint16_t color)
 {
-    uint32_t i;
-
-    TFT_Set_Window(0, 0, TFT_WIDTH - 1, TFT_HEIGHT - 1);
-    TFT_Write_Command(0x2C);  // RAMWR - 写内存
-
-    for (i = 0; i < (uint32_t)TFT_WIDTH * TFT_HEIGHT; i++) {
-        TFT_Write_Data(color >> 8);    // 高字节
-        TFT_Write_Data(color & 0xFF);  // 低字节
-    }
+    TFT_FillRect(0, 0, TFT_WIDTH, TFT_HEIGHT, color);
 }
 
 /**

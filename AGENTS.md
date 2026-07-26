@@ -41,15 +41,13 @@ CH32X035G8U/
 
 - **Main loop is non-blocking**: 1ms SysTick drives `system_tick_ms`. `Test_State_Machine()` in `cable_test.c` handles resistance measurement as a state machine (RC settle wait, ADC read, calculation). Never add blocking delays.
 - **Two display modes only** (V3.0): `MODE_CONTINUITY` (shows continuity + resistance + fast charge on one screen) and `MODE_EMARK` (shows E-Mark info).
-- **Resistance measurement**: 100Ω series resistor @ 3.3V → ~66mA through INA199 (gain 100x) → ADC. Range ≤1Ω, resolution ~1mΩ. Measurement active ~55ms per 1s cycle.
+- **Resistance measurement**: 100Ω series resistor @ 3.3V → ~33mA through VBUS/GND loop. Two ADC channels: V_PWR_L (PB0, op-amp 101x non-inverting, gain=1+10k/100) for <1Ω, V_PWR_H (PB1, direct) for up to 100Ω. Auto-switch at ~900mΩ (V_PWR_L adc > 3686) with hysteresis. Range ≤1Ω (resolution ~0.24mΩ) or ≤100Ω (resolution ~24mΩ). Measurement active ~55ms per 1s cycle.
 - **VCONN / PD channel relationship** (critical): VCONN is driven on **auxiliary CC GPIO pins** (PC3 for CC1, PC0 for CC2). USBPD hardware uses dedicated pins (PC14 for CC1, PC15 for CC2). If E-Mark is on CC1, VCONN goes on PC3 and PD communication uses CC2 (PC15). This is an inverse relationship.
+- **CC_E1/CC_E2 (PA2/PA1)**: Right-port CC pins, coupled by 5.1kΩ. **Must be floating during E-Marker PD communication** to avoid loading USBPD pins. During CC continuity test: both driven low (combined CC test). During Huawei fast-charge detect: PA2=high, PA1=ADC (5.1k acts as pull-up). No CC_R pin anymore.
 
 ## Documentation (repo-specific, not generic)
 
 - `doc/CableTester_Design.md` — system design document
-- `doc/usbpd/USB_PD_PROTOCOL_SPEC.md` — VDM header layout, Cable VDO1 bitfields, GoodCRC rules
-- `doc/ch32x035_usbpd/VCONN_AND_CHANNEL_MANAGEMENT.md` — VCONN/CC timing, CC_LVE register
-- `doc/ch32x035_usbpd/BMC_TIMING_AND_RX.md` — BMC 300kHz timing, RX troubleshooting
 - `EVT/EXAM/` — WCH official peripheral examples (ADC, SPI, USB, etc.)
 - `doc/CH32X035DS0.PDF` & `doc/CH32X035RM.PDF` — MCU datasheet and reference manual
 
