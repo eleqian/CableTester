@@ -40,9 +40,9 @@ typedef struct {
     uint8_t  epr_capable;        // EPR支持: 0-不支持, 1-支持
     uint8_t  usb_speed;          // USB速度等级
     uint8_t  current_capability; // 电流能力: 3A或5A
-    uint8_t  usb_version;        // USB版本
+    uint8_t  vdo_version;        // VDO版本
     uint16_t vendor_id;          // Vendor ID
-    uint16_t product_id;         // Product ID
+    uint16_t product_id;         // USB Product ID (Product VDO Bit31-16)
 
 } emarker_info_t;
 

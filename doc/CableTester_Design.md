@@ -1,7 +1,7 @@
 # CableTester 详细设计文档
 
-**版本**: V1.8
-**更新日期**: 2026-05-17
+**版本**: V3.1
+**更新日期**: 2026-08-02
 **作者**: CableTester Team
 
 ---
@@ -20,6 +20,7 @@
 | V1.7 | 2026-04-29 | Lingma | **重构为状态机架构，去除阻塞延时，修复SysTick配置** |
 | V1.8 | 2026-05-17 | Lingma | **硬件改动适配：参考电阻改为100Ω，AUX_G重命名为CC_R并实现外部电阻控制** |
 | V2.0 | 2026-07-26 | OpenCode | **硬件改动适配：参考电阻改为100Ω，运放增益101倍，取消CC_R，CC_E拆分为CC_E1/CC_E2** |
+| V3.1 | 2026-08-02 | OpenCode | **显示界面优化：E-Mark界面重排（2列对齐布局、类型入标题栏、线缆长度/HW-FW版本/Product ID解析、VDO合并一行）、显示配色统一、电阻数值与单位宽度对齐、test_result_t嵌套emarker_info_t** |
 
 ---
 
@@ -496,7 +497,7 @@ void TFT_Write_Data(uint8_t data);
 **功能**：
 - 初始化ST7735S显示屏
 - 提供图形绘制函数
-- 显示测试结果（4种模式）
+- 显示测试结果（两种模式）
 
 **主要函数**：
 ```c
@@ -511,23 +512,46 @@ void TFT_ShowWelcome(void);
 1. MODE_CONTINUITY - 通断测试+电阻值+快充识别，合并显示在同一页面
 2. MODE_EMARK - E-mark信息（通过USB PD协议读取详细信息）
 
+**显示布局（V3.1）**：
+
+通断模式（160×80 横屏）：
+```
+y=0   ●FULL FEAT          HUAWEI 5A    ← 状态栏: 指示灯+等级(5x7)
+y=13  R: 123 mΩ                          ← 电阻值 (12x24): 数值5档色/单位白色
+y=43  ■D+-  ■CC   ■SBU  ■SHLD           ← 信号线 (5x7): 绿=通/红=断
+y=52  ■TX1  ■RX1  ■TX2  ■RX2
+y=65  E-Marker: 5A       USB3.2G2        ← 底部信息 (5x7)
+```
+
+E-Mark模式（160×80 横屏）：
+```
+y=0   E-Mark: YES             Passive     ← 标题 + 线缆类型
+y=13  USB 3.2 Gen2              5A        ← 速度+电流 (8x16)
+y=34  EPR:Yes   MaxV:20V                  ← 2列详细字段(左x=4/右x=82)
+y=43  SBU:Yes   Len:~1m
+y=52  VID:0xFFFF PID:0xFFFF
+y=61  HW:0x1    FW:0x1
+y=70  VDO:12345678 87654321               ← 原始VDO合并一行
+```
+
+**配色统一规则（V3.1）**：
+- 绿=优秀/通过/支持，黄=中等，橙=警告，红=错误/断路，紫=华为5A快充，青=USB3.x速率标识，灰=中性/原始数据，白=标签/中性数值
+- 电阻数值5档色：<100mΩ绿 / 100-150黄 / 150-200橙 / 200-500红 / ≥500及OL白
+- 速度色阶全屏统一：USB2.0灰 / Gen1-Gen2青 / USB4 Gen3-Gen4绿
+- 电阻数值+单位总宽恒定对齐：毫欧"123 mΩ"(3+1+2字符)与欧姆"1.23 Ω"(4+1+1字符)均为6字符宽
+
 **数据结构**（整数类型）：
 ```c
 typedef struct {
-    uint8_t vbus_ok;
-    uint8_t gnd_ok;
-    uint8_t cc1_ok;
-    uint8_t cc2_ok;
-    uint8_t dp_ok;
-    uint8_t dm_ok;
-    uint8_t tx1_ok;
-    uint8_t tx2_ok;
-    uint8_t rx1_ok;
-    uint8_t rx2_ok;
-    uint8_t sbu_ok;
-    uint32_t resistance_mohm;  // 整数类型（毫欧）
-    uint8_t has_emark;
-    uint8_t fast_charge;  // 0:无, 1:VOOC, 2:Huawei
+    uint8_t power_ok;          // VBUS和GND检测: 1=回路通, 0=开路(显示"----")
+    uint8_t cc1_ok, cc2_ok;    // CC检测（合并测试）
+    uint8_t dp_dm_ok;          // D+和D-合并检测
+    uint8_t tx1_ok, rx1_ok, tx2_ok, rx2_ok;
+    uint8_t sbu_ok, shield_ok;
+    uint32_t resistance_mohm;  // 电阻值(mΩ), 开路时为RES_SATURATED
+    uint8_t has_emark;         // 是否检测到E-Mark芯片
+    uint8_t fast_charge;       // 快充: 0无, 1华为单CC, 2华为双CC
+    emarker_info_t emark;      // E-Mark芯片信息（嵌套结构, 整体拷贝赋值）
 } test_result_t;
 ```
 
@@ -566,25 +590,35 @@ void Run_Full_Test(test_result_t *result);
 **功能**：
 - 自动检测E-Mark芯片存在性
 - 通过USB PD协议发送Discover Identity命令
-- 接收并解析VDM响应，提取线缆详细信息
+- 接收并解析VDM响应，提取线缆详细信息（含USB Product ID、线缆长度近似值）
 - VCONN电源自动控制
 - 多CC通道自动选择（CC1/CC2）
 
 **数据结构**：
 ```c
 typedef struct {
-    uint8_t  valid;
-    uint32_t vdm_header;
-    uint32_t id_header;
-    uint32_t cable_vdo1;
-    uint8_t  cable_type;         // 0-被动, 1-主动
+    uint8_t  valid;              // 数据有效性标志
+    uint8_t  id_header_present;  // ID Header是否存在
+    uint32_t vdm_header;         // VDM Header
+    uint32_t id_header;          // ID Header
+    uint32_t cert_stat;          // Cert Stat VDO (可选)
+    uint32_t product_vdo;        // Product VDO
+    uint32_t cable_vdo1;         // Cable VDO 1
+    uint32_t cable_vdo2;         // Cable VDO 2 (可选, 仅被动线缆)
+    uint8_t  cable_type;         // 线缆类型: 0-被动, 1-主动, 2-未知
+    uint8_t  epr_capable;        // EPR支持: 0-不支持, 1-支持
     uint8_t  usb_speed;          // USB速度等级
     uint8_t  current_capability; // 电流能力（3A/5A）
-    uint8_t  epr_capable;        // EPR支持
-    uint16_t vendor_id;
-    uint16_t product_id;
+    uint8_t  vdo_version;        // VDO版本
+    uint16_t vendor_id;          // Vendor ID (ID Header Bit15-0)
+    uint16_t product_id;         // USB Product ID (Product VDO Bit31-16)
 } emarker_info_t;
 ```
+
+**线缆长度解析（V3.1）**：线缆长度由 Cable VDO1 的 Latency 位（16:13）近似换算：
+- 0001b~0111b → ~1m~7m（<10ns~60-70ns）
+- 1000b~1010b → ~100m/~200m/~300m
+- 0000b 及 1011b~1111b 无效 → 显示 "?"
 
 **PD通信步骤**：
 1. 检测E-Mark所在CC通道 → 确定VCONN供电和PD通信通道（逆关系，见3.4.1）
@@ -1151,6 +1185,41 @@ Header（16位）：
 - Message Type = 0x01（GoodCRC）
 - Message ID = 与被确认消息的Message ID一致
 
+## A.4 Product VDO（32位）
+
+```
+MSB                                                                  LSB
+┌──────────────────────┬──────────────────────┐
+│       31:16          │        15:0          │
+├──────────────────────┼──────────────────────┤
+│   USB Product ID     │      bcdDevice       │
+└──────────────────────┴──────────────────────┘
+```
+
+| 位域 | 说明 |
+|------|------|
+| 31:16 | USB Product ID：由厂商分配给端口的Product ID（本固件解析为 product_id 字段） |
+| 15:0 | bcdDevice：厂商分配给端口的设备版本号 |
+
+## A.5 线缆长度解析（Cable VDO1 Latency 位 16:13）
+
+Latency 表示信号在线缆内的延迟，可用于近似估算线缆长度：
+
+| Latency (16:13) | 延迟 | 近似长度 |
+|-----------------|------|---------|
+| 0000b | - | 无效（不得使用） |
+| 0001b | <10ns | ~1m |
+| 0010b | 10-20ns | ~2m |
+| 0011b | 20-30ns | ~3m |
+| 0100b | 30-40ns | ~4m |
+| 0101b | 40-50ns | ~5m |
+| 0110b | 50-60ns | ~6m |
+| 0111b | 60-70ns | ~7m |
+| 1000b | 1000ns | ~100m |
+| 1001b | 2000ns | ~200m |
+| 1010b | 3000ns | ~300m |
+| 1011b-1111b | - | 无效（不得使用） |
+
 ---
 
 **文档结束**
@@ -1162,5 +1231,9 @@ Header（16位）：
 - ✅ 纯整数运算优化（V1.3）
 - ✅ 参考电阻改为100Ω，运放增益101倍（V1.8）
 - ✅ 取消CC_R引脚，CC_E拆分为CC_E1/CC_E2，直接GPIO驱动控制（V1.8）
+- ✅ E-Mark界面重排（2列对齐布局、类型入标题栏、VDO合并一行）（V3.1）
+- ✅ 线缆长度解析（Latency近似）、硬件/固件版本、USB Product ID解析（V3.1）
+- ✅ 显示配色统一（电阻5档色、速度色阶、华为快充紫色）（V3.1）
+- ✅ 电阻数值+单位宽度对齐、test_result_t嵌套emarker_info_t（V3.1）
 
 所有代码已通过编译检查，可以立即下载测试。

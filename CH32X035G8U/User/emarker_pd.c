@@ -462,6 +462,8 @@ uint8_t EMarker_Parse_Response(emarker_info_t *info)
     if (num_do > 0) {
         info->product_vdo = *ptr++;
         num_do--;
+        // USB Product ID位于Product VDO Bit31-16（Bit15-0为bcdDevice）
+        info->product_id = (uint16_t)(info->product_vdo >> 16);
     }
 
     // 解析Cable VDO1（如果存在）
@@ -550,8 +552,8 @@ void EMarker_Parse_Cable_VDO1(uint32_t cable_vdo1, emarker_info_t *info)
     // 提取EPR支持 (Bit 17)
     info->epr_capable = (cable_vdo1 & CABLE_VDO1_EPR_CAPABLE) ? 1 : 0;
 
-    // 提取VDO版本作为USB版本参考 (Bit 23-21)
-    info->usb_version = (cable_vdo1 & CABLE_VDO1_VDO_VERSION_MASK) >> 21;
+    // 提取VDO版本 (Bit 23-21)
+    info->vdo_version = (cable_vdo1 & CABLE_VDO1_VDO_VERSION_MASK) >> 21;
 }
 
 /******************************************************************************

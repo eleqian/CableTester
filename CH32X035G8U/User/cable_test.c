@@ -84,6 +84,13 @@ static uint8_t Detect_Fast_Charge_Type_Internal(void);
 static uint32_t Calculate_Cable_Resistance_Single_Internal(void);
 static void Resistance_Test_State_Machine(void);
 
+/* E-Mark信息复位: 全部清零, 线缆类型置未知(2) */
+static void Reset_Emark_Info(emarker_info_t *info)
+{
+    memset(info, 0, sizeof(emarker_info_t));
+    info->cable_type = 2;  /* 未知 */
+}
+
 void Cable_Test_Init(void)
 {
     test_state = TEST_STATE_IDLE;
@@ -108,19 +115,7 @@ void Cable_Test_Init(void)
     test_result.resistance_mohm = 0;
     test_result.has_emark = 0;
     test_result.fast_charge = 0;
-    test_result.emarker_valid = 0;
-    test_result.cable_type = 2;
-    test_result.usb_speed = 0;
-    test_result.current_capability = 0;
-    test_result.epr_capable = 0;
-    test_result.usb_version = 0;
-    test_result.vendor_id = 0;
-    test_result.product_id = 0;
-    test_result.id_header = 0;
-    test_result.cert_stat = 0;
-    test_result.product_vdo = 0;
-    test_result.cable_vdo1 = 0;
-    test_result.cable_vdo2 = 0;
+    Reset_Emark_Info(&test_result.emark);
 
     display_mode = MODE_CONTINUITY;
 }
@@ -307,19 +302,7 @@ void Detect_Emark_Info(test_result_t *result)
     result->has_emark = Detect_Emark_Chip_Internal();
 
     if (!result->has_emark) {
-        result->emarker_valid = 0;
-        result->cable_type = 2;
-        result->usb_speed = 0;
-        result->current_capability = 0;
-        result->epr_capable = 0;
-        result->usb_version = 0;
-        result->vendor_id = 0;
-        result->product_id = 0;
-        result->id_header = 0;
-        result->cert_stat = 0;
-        result->product_vdo = 0;
-        result->cable_vdo1 = 0;
-        result->cable_vdo2 = 0;
+        Reset_Emark_Info(&result->emark);
         return;
     }
 
@@ -327,33 +310,10 @@ void Detect_Emark_Info(test_result_t *result)
     ret = EMarker_Full_Detect(&emark_info);
 
     if (ret == 0 && emark_info.valid) {
-        result->emarker_valid = 1;
-        result->cable_type = emark_info.cable_type;
-        result->usb_speed = emark_info.usb_speed;
-        result->current_capability = emark_info.current_capability;
-        result->epr_capable = emark_info.epr_capable;
-        result->usb_version = emark_info.usb_version;
-        result->vendor_id = emark_info.vendor_id;
-        result->product_id = emark_info.product_id;
-        result->id_header = emark_info.id_header;
-        result->cert_stat = emark_info.cert_stat;
-        result->product_vdo = emark_info.product_vdo;
-        result->cable_vdo1 = emark_info.cable_vdo1;
-        result->cable_vdo2 = emark_info.cable_vdo2;
+        /* 嵌套结构整体拷贝, 一次赋值完成全部字段 */
+        result->emark = emark_info;
     } else {
-        result->emarker_valid = 0;
-        result->cable_type = 2;
-        result->usb_speed = 0;
-        result->current_capability = 0;
-        result->epr_capable = 0;
-        result->usb_version = 0;
-        result->vendor_id = 0;
-        result->product_id = 0;
-        result->id_header = 0;
-        result->cert_stat = 0;
-        result->product_vdo = 0;
-        result->cable_vdo1 = 0;
-        result->cable_vdo2 = 0;
+        Reset_Emark_Info(&result->emark);
     }
 }
 
@@ -495,26 +455,14 @@ void Test_State_Machine(void)
             /* E-Mark检测：首次探测到时读取基本信息 */
             CC_E_Set_Floating();
             if (EMarker_Detect_Chip()) {
-                if (!test_result.emarker_valid) {
+                if (!test_result.emark.valid) {
                     Detect_Emark_Info(&test_result);
                 }
                 test_result.has_emark = 1;
             } else {
                 if (test_result.has_emark) {
                     test_result.has_emark = 0;
-                    test_result.emarker_valid = 0;
-                    test_result.cable_type = 2;
-                    test_result.usb_speed = 0;
-                    test_result.current_capability = 0;
-                    test_result.epr_capable = 0;
-                    test_result.usb_version = 0;
-                    test_result.vendor_id = 0;
-                    test_result.product_id = 0;
-                    test_result.id_header = 0;
-                    test_result.cert_stat = 0;
-                    test_result.product_vdo = 0;
-                    test_result.cable_vdo1 = 0;
-                    test_result.cable_vdo2 = 0;
+                    Reset_Emark_Info(&test_result.emark);
                 }
             }
             use_v_pwr_l_channel = 1;  /* 每周期从V_PWR_L高精度通道开始 */
@@ -554,12 +502,13 @@ void Test_State_Machine(void)
  *
  * 电阻数值格式化（不含单位，供独立着色）
  * 根据阻值自动选择最佳显示格式：
- *   <1000 mΩ  → "xxx"     (毫欧整数)
- *   >=1000 mΩ → "x.xx"    (欧姆，两位小数)
- *   >=10000 mΩ→ "xx.x"    (欧姆，一位小数)
- *   OL        → "----"    (开路)
+ *   <1000 mΩ  → "xxx"     (毫欧整数, 右对齐到3字符槽)
+ *   >=1000 mΩ → "x.xx"    (欧姆，两位小数, 4字符)
+ *   >=10000 mΩ→ "xx.x"    (欧姆，一位小数, 4字符)
+ *   OL        → "----"    (开路, 4字符)
+ * 数值槽位+1空格+单位合计恒6字符(毫欧3+1+2 / 欧姆4+1+1), 保证两种情况显示宽度对齐
  *
- * @param buf: 输出缓冲区（至少5字节），右对齐填充到4字符槽位
+ * @param buf: 输出缓冲区（至少5字节）
  * @param res_mohm: 电阻值(mΩ)
  * @param power_ok: 电源状态
  */
@@ -583,35 +532,38 @@ static void Format_Resistance_Value(char *buf, uint32_t res_mohm, uint8_t power_
             sprintf(tmp, "%u.%u", whole, frac);
         }
     }
-    /* 右对齐到4字符槽位：数值+单位总宽恒定，避免残留像素 */
+    /* 毫欧右对齐到3字符槽(与2字符单位合计5), 欧姆/OL为4字符(与1字符单位合计5);
+       总字符数恒定 → 每次重绘覆盖全部5个字符位置, 无残留 */
     uint8_t len = (uint8_t)strlen(tmp);
-    uint8_t pad = 4 - len;
+    uint8_t slot = (power_ok && res_mohm < 1000) ? 3 : 4;
+    uint8_t pad = slot - len;
     uint8_t i;
     for (i = 0; i < pad; i++) buf[i] = ' ';
     for (i = 0; i < len; i++) buf[pad + i] = tmp[i];
-    buf[4] = '\0';
+    buf[slot] = '\0';
 }
 
 /*
- * 电阻单位格式化（恒白色显示）
- *   <1000 mΩ → "mΩ"   (毫欧)
- *   >=1000 mΩ→ "Ω "   (欧姆)
- *   OL        → "  "   (空白)
+ * 电阻单位格式化（恒白色显示, 前缀固定1空格与数值分隔）
+ *   <1000 mΩ → " mΩ"   (毫欧, 3字符)
+ *   >=1000 mΩ→ " Ω"    (欧姆, 2字符)
+ *   OL        → "  "   (空白, 2字符)
+ * 数值槽位+1空格+单位合计恒6字符(3+1+2 或 4+1+1), 保证两种情况显示宽度对齐
  *
- * @param buf: 输出缓冲区（至少3字节），固定2字符宽度
+ * @param buf: 输出缓冲区（至少4字节）
  * @param res_mohm: 电阻值(mΩ)
  * @param power_ok: 电源状态
  */
 static void Format_Resistance_Unit(char *buf, uint32_t res_mohm, uint8_t power_ok)
 {
     if (!power_ok) {
-        buf[0] = ' '; buf[1] = ' '; buf[2] = '\0';
+        buf[0] = ' '; buf[1] = ' '; buf[2] = '\0';  /* 空格间隙+空槽, 合计6字符防残留 */
         return;
     }
     if (res_mohm < 1000) {
-        buf[0] = 'm'; buf[1] = (char)CHAR_OMEGA; buf[2] = '\0';
+        buf[0] = ' '; buf[1] = 'm'; buf[2] = (char)CHAR_OMEGA; buf[3] = '\0';
     } else {
-        buf[0] = (char)CHAR_OMEGA; buf[1] = ' '; buf[2] = '\0';
+        buf[0] = ' '; buf[1] = (char)CHAR_OMEGA; buf[2] = '\0';
     }
 }
 
@@ -670,21 +622,21 @@ void TFT_ShowContinuity(test_result_t *result)
         sprintf(class_buf, "%-11s", "OPEN");
         class_color = COLOR_RED; indicator_color = COLOR_RED;
     } else if (result->dp_dm_ok == 0) {
-        sprintf(class_buf, "%-11s", "Power ONLY");
+        sprintf(class_buf, "%-11s", "POWER ONLY");
         class_color = COLOR_ORANGE; indicator_color = COLOR_ORANGE;
     } else {
         uint8_t usb3_lanes = 0;
         if (result->tx1_ok && result->rx1_ok) usb3_lanes++;
         if (result->tx2_ok && result->rx2_ok) usb3_lanes++;
         if ((result->cc1_ok || result->cc2_ok) && result->sbu_ok && result->shield_ok && usb3_lanes == 2) {
-            sprintf(class_buf, "%-11s", "Type-C Full");
+            sprintf(class_buf, "%-11s", "TYPE-C FULL");
             class_color = COLOR_GREEN; indicator_color = COLOR_GREEN;
         } else if (usb3_lanes == 2) {
             sprintf(class_buf, "%-11s", "USB 3.2");
-            class_color = COLOR_CYAN; indicator_color = COLOR_GREEN;
+            class_color = COLOR_CYAN; indicator_color = COLOR_CYAN;
         } else if (usb3_lanes == 1) {
             sprintf(class_buf, "%-11s", "USB 3.0");
-            class_color = COLOR_CYAN; indicator_color = COLOR_GREEN;
+            class_color = COLOR_CYAN; indicator_color = COLOR_CYAN;
         } else {
             sprintf(class_buf, "%-11s", "USB 2.0");
             class_color = COLOR_YELLOW; indicator_color = COLOR_YELLOW;
@@ -695,16 +647,16 @@ void TFT_ShowContinuity(test_result_t *result)
 
     char charge_buf[10];
     uint16_t charge_color = COLOR_GRAY;
-    if (result->fast_charge == 1) {
-        sprintf(charge_buf, "%-9s", "Huawei 5A"); charge_color = COLOR_YELLOW;
-    } else if (result->fast_charge == 2) {
-        sprintf(charge_buf, "%-9s", "Huawei 5A"); charge_color = COLOR_MAGENTA;
+    if (result->fast_charge != 0) {
+        sprintf(charge_buf, "%-9s", "HUAWEI 5A");
+        charge_color = (result->fast_charge == 1) ? COLOR_PURPLE : COLOR_ORANGE;  /* 紫色=华为5A线缆插头色 */
     } else {
-        sprintf(charge_buf, "%-9s", ""); charge_color = COLOR_BLACK;
+        sprintf(charge_buf, "%-9s", "");
+        charge_color = COLOR_BLACK;
     }
     TFT_DrawString_Font(106, 0, charge_buf, charge_color, COLOR_BLACK, FONT_5x7);
 
-    TFT_FillRect(0, 9, 160, 1, COLOR_DARK_GRAY);
+    TFT_FillRect(0, 10, 160, 1, COLOR_DARK_GRAY);
 
     /* --- 分区2：电阻值 (y=13, 12x24 居中) --- */
     char rval[8], runit[4];
@@ -712,8 +664,10 @@ void TFT_ShowContinuity(test_result_t *result)
     Format_Resistance_Unit(runit, result->resistance_mohm, result->power_ok);
     uint16_t r_color = Get_Resistance_Color(result->resistance_mohm, result->power_ok);
     TFT_DrawString_Font(15, 13, "R:", COLOR_WHITE, COLOR_BLACK, FONT_12x24);
-    TFT_DrawString_Font(54, 13, rval, r_color, COLOR_BLACK, FONT_12x24);  /* 数值: 4档颜色, 4字符槽, 与:间隔1字符 */
-    TFT_DrawString_Font(119, 13, runit, COLOR_WHITE, COLOR_BLACK, FONT_12x24);  /* 单位: 恒白色, 与数值间隔1字符 */
+    /* 数值+1空格+单位合计恒6字符(13px/字符): 毫欧"123 mΩ"与欧姆"1.23 Ω"总宽对齐, 起点同为x=54 */
+    TFT_DrawString_Font(54, 13, rval, r_color, COLOR_BLACK, FONT_12x24);
+    TFT_DrawString_Font((uint16_t)(54 + strlen(rval) * 13), 13, runit,
+                        COLOR_WHITE, COLOR_BLACK, FONT_12x24);
 
     TFT_FillRect(0, 39, 160, 1, COLOR_DARK_GRAY);
 
@@ -732,47 +686,70 @@ void TFT_ShowContinuity(test_result_t *result)
     /* --- 分区4：底部信息栏 (y=65, 5x7) --- */
     char em_left[16];
     uint16_t em_color;
-    if (result->has_emark && result->emarker_valid) {
-        const char *cur_str = (result->current_capability == 2) ? "5A" : "3A";
-        sprintf(em_left, "E-Marker: %-2s ", cur_str);  /* 固定13字符宽度 */
+    if (result->has_emark && result->emark.valid) {
+        const char *cur_str = (result->emark.current_capability == 2) ? "5A" : "3A";
+        sprintf(em_left, "E-Mark: %-2s ", cur_str);  /* 固定11字符宽度 */
         em_color = COLOR_GREEN;
     } else if (result->has_emark) {
-        sprintf(em_left, "%-13s", "E-Marker: YES");
-        em_color = COLOR_YELLOW;
+        sprintf(em_left, "%-11s", "E-Mark: YES");
+        em_color = COLOR_ORANGE;  /* 有E-Mark但读取失败 → 橙色警告 */
     } else {
-        sprintf(em_left, "%-13s", "E-Marker: NO");
+        sprintf(em_left, "%-11s", "E-Mark: NO");
         em_color = COLOR_GRAY;
     }
     TFT_DrawString_Font(4, 65, em_left, em_color, COLOR_BLACK, FONT_5x7);
-    if (result->has_emark && result->emarker_valid) {
+    if (result->has_emark && result->emark.valid) {
         const char *speed_str;
-        switch (result->usb_speed) {
-            case 0x00: speed_str = "USB2.0   "; break;
-            case 0x01: speed_str = "USB3.2G1 "; break;
-            case 0x02: speed_str = "USB3.2G2 "; break;
-            case 0x03: speed_str = "USB4G3  "; break;
-            case 0x04: speed_str = "USB4G4  "; break;
-            default:   speed_str = "         "; break;
+        uint16_t speed_color = COLOR_CYAN;
+        switch (result->emark.usb_speed) {
+            case 0x00: speed_str = "USB2.0   "; speed_color = COLOR_GRAY;  break;
+            case 0x01: speed_str = "USB3.2 G1"; speed_color = COLOR_CYAN;  break;
+            case 0x02: speed_str = "USB3.2 G2"; speed_color = COLOR_CYAN;  break;
+            case 0x03: speed_str = "USB4 G3  "; speed_color = COLOR_GREEN; break;
+            case 0x04: speed_str = "USB4 G4  "; speed_color = COLOR_GREEN; break;
+            default:   speed_str = "         "; speed_color = COLOR_BLACK; break;
         }
-        TFT_DrawString_Font(84, 65, speed_str, COLOR_CYAN, COLOR_BLACK, FONT_5x7);
+        /* 与E-Mark模式同一速度色阶: 2.0=灰 / G1G2=青 / G3G4=绿 */
+        TFT_DrawString_Font(84, 65, speed_str, speed_color, COLOR_BLACK, FONT_5x7);
     } else {
         TFT_DrawString_Font(84, 65, "         ", COLOR_BLACK, COLOR_BLACK, FONT_5x7);
     }
 }
 
 /*
+ * 线缆长度近似值（由Cable VDO1 Latency位 16:13 换算，见USB PD spec）
+ * 信号延迟近似对应线缆长度：
+ *   0000b无效 / 0001b~0111b = 1m~7m / 1000b~1010b = 100m~300m / 1011b~1111b无效
+ */
+static const char *const lat_len_str[16] = {
+    "?",     /* 0000: 无效 */
+    "~1m",   /* <10ns     */
+    "~2m",   /* 10-20ns   */
+    "~3m",   /* 20-30ns   */
+    "~4m",   /* 30-40ns   */
+    "~5m",   /* 40-50ns   */
+    "~6m",   /* 50-60ns   */
+    "~7m",   /* 60-70ns   */
+    "~100m", /* 1000ns    */
+    "~200m", /* 2000ns    */
+    "~300m", /* 3000ns    */
+    "?", "?", "?", "?", "?"  /* 1011-1111: 无效 */
+};
+
+/*
  * E-Mark模式显示 (160x80 横屏, 详尽模式)
  * ┌─────────────────────────────────────┐ y=0
- * │ E-Mark: YES             EPR:Yes     │ ← 标题 + EPR (5x7)
+ * │ E-Mark: YES             Passive     │ ← 标题 + 线缆类型 (5x7)
  * ├─────────────────────────────────────┤ y=9
  * │ USB 3.2 Gen2              5A        │ ← 速度+电流 (8x16)
  * ├─────────────────────────────────────┤ y=30
- * │ Passive  USB v1.3                   │ ← 类型 + VDO版本 (5x7)
- * │ VID:0xFFFF  PID:0xFFFF              │ ← VID/PID
- * │ SBU:Y  Lat:2  MaxV:20V              │ ← 线缆特性
- * │ VDO1:0x12345678                     │ ← 原始VDO
- * │ VDO2:0x87654321                     │ ← 原始VDO2
+ * │ EPR:Yes   MaxV:20V                  │ ← 2列详细字段(左x=4/右x=82)
+ * │ SBU:Yes   Len:~1m                   │
+ * │ VID:0xFFFF PID:0xFFFF               │
+ * │ HW:0x1    FW:0x1                    │
+ * │ VDO:12345678 87654321               │ ← 原始VDO合并一行
  * └─────────────────────────────────────┘ y=79
+ * 配色统一规则: 标签白色 / 能力值绿(支持)或灰(不支持) / 中性数据白 / 原始数据灰
  */
 void TFT_ShowEmark(test_result_t *result)
 {
@@ -783,94 +760,99 @@ void TFT_ShowEmark(test_result_t *result)
         last_has_emark = result->has_emark;
     }
 
-    /* --- 标题栏 (y=0) --- */
+    /* --- 标题栏 (y=0): E-Mark状态 + 线缆类型(右侧) --- */
     TFT_DrawString_Font(4, 0, "E-Mark:", COLOR_WHITE, COLOR_BLACK, FONT_5x7);
-    TFT_DrawString_Font(56, 0, result->has_emark ? "YES" : "NO",
+    TFT_DrawString_Font(56, 0, result->has_emark ? "YES" : "NO ",
                          result->has_emark ? COLOR_GREEN : COLOR_RED, COLOR_BLACK, FONT_5x7);
-    if (result->has_emark && result->emarker_valid) {
-        sprintf(buf, "EPR:%-3s", result->epr_capable ? "Yes" : "No");
-        TFT_DrawString_Font(106, 0, buf, result->epr_capable ? COLOR_GREEN : COLOR_GRAY,
-                             COLOR_BLACK, FONT_5x7);
-    }
-    TFT_FillRect(0, 9, 160, 1, COLOR_DARK_GRAY);
-
-    if (result->has_emark && result->emarker_valid) {
-        /* --- 速度 + 电流 (y=13, 8x16) --- */
-        const char *speed_str;
-        uint16_t speed_color = COLOR_CYAN;
-        switch (result->usb_speed) {
-            case 0x00: speed_str = "USB 2.0";      speed_color = COLOR_GRAY;  break;
-            case 0x01: speed_str = "USB 3.2 Gen1"; speed_color = COLOR_CYAN;  break;
-            case 0x02: speed_str = "USB 3.2 Gen2"; speed_color = COLOR_CYAN;  break;
-            case 0x03: speed_str = "USB4 Gen3";    speed_color = COLOR_GREEN; break;
-            case 0x04: speed_str = "USB4 Gen4";    speed_color = COLOR_GREEN; break;
-            default:   speed_str = "Unknown";      speed_color = COLOR_GRAY;  break;
-        }
-        TFT_DrawString_Font(5, 13, speed_str, speed_color, COLOR_BLACK, FONT_8x16);
-
-        const char *cur_str = (result->current_capability == 2) ? "5A" : "3A";
-        uint16_t cur_color = (result->current_capability == 2) ? COLOR_GREEN : COLOR_YELLOW;
-        TFT_DrawString_Font(130, 13, cur_str, cur_color, COLOR_BLACK, FONT_8x16);
-
-        TFT_FillRect(0, 30, 160, 1, COLOR_DARK_GRAY);
-
-        /* --- 类型 + VDO版本 (y=34) --- */
-        const char *type_short;
-        switch (result->cable_type) {
+    /* 类型固定8字符槽(%-8s)防残留; 无效时画空槽 */
+    const char *type_short = "";
+    if (result->has_emark && result->emark.valid) {
+        switch (result->emark.cable_type) {
             case 0: type_short = "Passive"; break;
             case 1: type_short = "Active";  break;
             default:type_short = "Unknown"; break;
         }
-        const char *ver_str;
-        switch (result->usb_version) {
-            case 0: ver_str = "v1.0"; break;
-            case 1: ver_str = "v1.3"; break;
-            case 2: ver_str = "v2.0"; break;
-            case 3: ver_str = "v2.1"; break;
-            case 4: ver_str = "v3.0"; break;
-            case 5: ver_str = "v3.1"; break;
-            case 6: ver_str = "v3.2"; break;
-            default:ver_str = "v?";   break;
+    }
+    sprintf(buf, "%-8s", type_short);
+    TFT_DrawString_Font(106, 0, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x7);
+    TFT_FillRect(0, 10, 160, 1, COLOR_DARK_GRAY);
+
+    if (result->has_emark && result->emark.valid) {
+        /* --- 速度 + 电流 (y=13, 8x16) --- */
+        const char *speed_str;
+        uint16_t speed_color = COLOR_CYAN;
+        switch (result->emark.usb_speed) {
+            case 0x00: speed_str = "USB2.0";      speed_color = COLOR_GRAY;  break;
+            case 0x01: speed_str = "USB3.2 Gen1"; speed_color = COLOR_CYAN;  break;
+            case 0x02: speed_str = "USB3.2 Gen2"; speed_color = COLOR_CYAN;  break;
+            case 0x03: speed_str = "USB4 Gen3";   speed_color = COLOR_GREEN; break;
+            case 0x04: speed_str = "USB4 Gen4";   speed_color = COLOR_GREEN; break;
+            default:   speed_str = "Unknown";     speed_color = COLOR_GRAY;  break;
         }
-        sprintf(buf, "%-8s USB %s", type_short, ver_str);
-        TFT_DrawString_Font(4, 34, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x7);
+        sprintf(buf, "%-14s", speed_str);
+        TFT_DrawString_Font(5, 13, buf, speed_color, COLOR_BLACK, FONT_8x16);
 
-        /* --- VID/PID (y=43) --- */
-        sprintf(buf, "VID:0x%04X  PID:0x%04X", result->vendor_id, result->product_id);
-        TFT_DrawString_Font(4, 43, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x7);
+        const char *cur_str = (result->emark.current_capability == 2) ? "5A" : "3A";
+        uint16_t cur_color = (result->emark.current_capability == 2) ? COLOR_GREEN : COLOR_YELLOW;
+        TFT_DrawString_Font(130, 13, cur_str, cur_color, COLOR_BLACK, FONT_8x16);
 
-        /* --- 线缆特性 (y=52): SBU/延迟/最大VBUS --- */
-        uint8_t latency = (uint8_t)((result->cable_vdo1 & CABLE_VDO1_LATENCY_MASK) >> 13);
-        uint8_t maxv = (uint8_t)((result->cable_vdo1 & CABLE_VDO1_MAX_VBUS_MASK) >> 9);
-        uint8_t sbu = (result->cable_vdo1 & CABLE_VDO1_SBU_SUPPORTED) ? 1 : 0;
+        TFT_FillRect(0, 30, 160, 1, COLOR_DARK_GRAY);
+
+        /* --- 2列详细字段 (y=34/43/52/61): 左列x=4, 右列x=82对齐 --- */
+        uint8_t maxv = (uint8_t)((result->emark.cable_vdo1 & CABLE_VDO1_MAX_VBUS_MASK) >> 9);
+        uint8_t latency = (uint8_t)((result->emark.cable_vdo1 & CABLE_VDO1_LATENCY_MASK) >> 13);
+        uint8_t sbu = (result->emark.cable_vdo1 & CABLE_VDO1_SBU_SUPPORTED) ? 1 : 0;
+        uint8_t hw_ver = (uint8_t)((result->emark.cable_vdo1 & CABLE_VDO1_HW_VERSION_MASK) >> 28);
+        uint8_t fw_ver = (uint8_t)((result->emark.cable_vdo1 & CABLE_VDO1_FW_VERSION_MASK) >> 24);
         const char *maxv_str;
         switch (maxv) {
             case 0: maxv_str = "20V"; break;
-            case 1: maxv_str = "30V"; break;
-            case 2: maxv_str = "40V"; break;
             case 3: maxv_str = "50V"; break;
-            default:maxv_str = "?";   break;
+            default:maxv_str = "20V"; break;
         }
-        sprintf(buf, "SBU:%s  Lat:%u  MaxV:%s", sbu ? "Y" : "N", latency, maxv_str);
-        TFT_DrawString_Font(4, 52, buf, COLOR_CYAN, COLOR_BLACK, FONT_5x7);
 
-        /* --- 原始VDO (y=61, 70) --- */
-        sprintf(buf, "VDO1:0x%08X", result->cable_vdo1);
-        TFT_DrawString_Font(4, 61, buf, COLOR_GRAY, COLOR_BLACK, FONT_5x7);
+        /* EPR + MaxV */
+        sprintf(buf, "EPR:");
+        TFT_DrawString_Font(4, 34, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x7);
+        sprintf(buf, "%-3s", result->emark.epr_capable ? "Yes" : "No");
+        TFT_DrawString_Font(28, 34, buf, result->emark.epr_capable ? COLOR_GREEN : COLOR_GRAY,
+                             COLOR_BLACK, FONT_5x7);
+        sprintf(buf, "MaxV:%-3s", maxv_str);
+        TFT_DrawString_Font(82, 34, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x7);
 
-        if (result->cable_vdo2 != 0) {
-            sprintf(buf, "VDO2:0x%08X", result->cable_vdo2);
+        /* SBU + Len */
+        sprintf(buf, "SBU:");
+        TFT_DrawString_Font(4, 43, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x7);
+        sprintf(buf, "%-3s", sbu ? "Yes" : "No");
+        TFT_DrawString_Font(28, 43, buf, sbu ? COLOR_GREEN : COLOR_GRAY,
+                             COLOR_BLACK, FONT_5x7);
+        sprintf(buf, "Len:%-5s", lat_len_str[latency]);
+        TFT_DrawString_Font(82, 43, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x7);
+
+        /* VID + PID */
+        sprintf(buf, "VID:0x%04X", result->emark.vendor_id);
+        TFT_DrawString_Font(4, 52, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x7);
+        sprintf(buf, "PID:0x%04X", result->emark.product_id);
+        TFT_DrawString_Font(82, 52, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x7);
+
+        /* HW + FW */
+        sprintf(buf, "HW :0x%X", hw_ver);
+        TFT_DrawString_Font(4, 61, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x7);
+        sprintf(buf, "FW :0x%X", fw_ver);
+        TFT_DrawString_Font(82, 61, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x7);
+
+        /* --- 原始VDO合并一行 (y=70) --- */
+        /* VDO:%08X(13字符) + %08X(8字符) = 21字符; VDO2缺失时补8空格固定宽度 */
+        if (result->emark.cable_vdo2 != 0) {
+            sprintf(buf, "VDO:%08X %08X", result->emark.cable_vdo1, result->emark.cable_vdo2);
         } else {
-            sprintf(buf, "%-16s", "");
+            sprintf(buf, "VDO:%08X %8s", result->emark.cable_vdo1, "");
         }
         TFT_DrawString_Font(4, 70, buf, COLOR_GRAY, COLOR_BLACK, FONT_5x7);
-
-    } else if (result->has_emark && !result->emarker_valid) {
-        TFT_DrawString_Font(5, 15, "PD Comm Failed", COLOR_RED, COLOR_BLACK, FONT_12x24);
-        TFT_DrawString_Font(4, 43, "Basic Cable Info     ", COLOR_GRAY, COLOR_BLACK, FONT_5x7);
+    } else if (result->has_emark && !result->emark.valid) {
+        TFT_DrawString_Font(5, 13, "PD Comm Failed", COLOR_RED, COLOR_BLACK, FONT_8x16);
     } else {
-        TFT_DrawString_Font(5, 15, "No E-Mark Chip", COLOR_GRAY, COLOR_BLACK, FONT_12x24);
-        TFT_DrawString_Font(4, 43, "Basic USB Cable      ", COLOR_GRAY, COLOR_BLACK, FONT_5x7);
+        TFT_DrawString_Font(5, 13, "No E-Mark Chip", COLOR_GRAY, COLOR_BLACK, FONT_8x16);
     }
 }
 

@@ -35,9 +35,9 @@ extern "C" {
 #define COLOR_BLUE      0x001F
 #define COLOR_YELLOW    0xFFE0
 #define COLOR_CYAN      0x07FF
-#define COLOR_MAGENTA   0xF81F
+#define COLOR_PURPLE    0xC81F  /* 紫色 */
 #define COLOR_GRAY      0x8410
-#define COLOR_ORANGE    0xFA00
+#define COLOR_ORANGE    0xFC00  /* 橙色(原0xFA00偏红) */
 #define COLOR_DARK_GRAY 0x4208
 
 /* 函数声明 */

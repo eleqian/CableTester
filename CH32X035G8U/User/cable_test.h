@@ -11,6 +11,7 @@
 
 #include "ch32x035.h"
 #include "cable_tft.h"
+#include "emarker_pd.h"  // emarker_info_t: 嵌套进test_result_t, 整体拷贝赋值
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,34 +19,22 @@ extern "C" {
 
 /* 测试结果结构 */
 typedef struct {
-    uint8_t power_ok;          // VBUS和GND检测
-    uint8_t cc1_ok;            // CC1检测（合并测试，与cc2_ok同值）
+    uint8_t power_ok;          // VBUS和GND检测: 1=回路通(测量有效), 0=开路
+    uint8_t cc1_ok;            // CC1检测
     uint8_t cc2_ok;            // CC2检测
-    uint8_t dp_dm_ok;          // D+和D-合并
-    uint8_t tx1_ok;            // TX1
-    uint8_t rx1_ok;            // RX1
-    uint8_t tx2_ok;            // TX2
-    uint8_t rx2_ok;            // RX2
-    uint8_t sbu_ok;            // SBU
-    uint8_t shield_ok;         // 屏蔽层(EH)
-    uint32_t resistance_mohm;  // 电阻值(mΩ)
-    uint8_t has_emark;
-    uint8_t fast_charge;       // 0:无, 1:Huawei单CC, 2:Huawei双CC
+    uint8_t dp_dm_ok;          // D+和D-合并检测
+    uint8_t tx1_ok;            // TX1检测
+    uint8_t rx1_ok;            // RX1检测
+    uint8_t tx2_ok;            // TX2检测
+    uint8_t rx2_ok;            // RX2检测
+    uint8_t sbu_ok;            // SBU检测
+    uint8_t shield_ok;         // 屏蔽层(EH)检测
+    uint32_t resistance_mohm;  // 电阻值(mΩ), 开路时为RES_SATURATED
+    uint8_t has_emark;         // 是否检测到E-Mark芯片: 1=有, 0=无
+    uint8_t fast_charge;       // 快充检测: 0=无, 1=Huawei单CC, 2=Huawei双CC
 
-    // E-Mark详细信息
-    uint8_t emarker_valid;
-    uint8_t cable_type;
-    uint8_t usb_speed;
-    uint8_t current_capability;
-    uint8_t epr_capable;
-    uint8_t usb_version;          // USB版本 (Cable VDO1 Bit23-21)
-    uint16_t vendor_id;
-    uint16_t product_id;
-    uint32_t id_header;           // ID Header原始值
-    uint32_t cert_stat;           // Cert Stat VDO
-    uint32_t product_vdo;         // Product VDO
-    uint32_t cable_vdo1;          // Cable VDO1原始值
-    uint32_t cable_vdo2;          // Cable VDO2原始值
+    // E-Mark详细信息（仅has_emark && emark.valid时有效）
+    emarker_info_t emark;      // E-Mark芯片信息（嵌套结构, 直接整体拷贝, 避免逐字段冗余赋值）
 } test_result_t;
 
 /* 显示模式枚举（V3.0：仅两种模式） */
