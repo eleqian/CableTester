@@ -86,6 +86,11 @@ typedef struct {
 #define PRODUCT_TYPE_ACTIVE_CABLE  0x04
 #define PRODUCT_TYPE_VPD           0x06
 
+/* cable_type取值（由ID Header Product Type归一化后的线缆类型） */
+#define CABLE_TYPE_PASSIVE  0
+#define CABLE_TYPE_ACTIVE   1
+#define CABLE_TYPE_UNKNOWN  2
+
 /* Active Cable VDO1位定义 - According to USB PD 3.0 Spec */
 // Note: This is for Active Cable, differs from Passive Cable
 #define CABLE_VDO1_HW_VERSION_MASK   (0x0F << 28)  // Bit 31-28: Hardware Version
@@ -97,6 +102,10 @@ typedef struct {
 #define CABLE_VDO1_LATENCY_MASK      (0x0F << 13)  // Bit 16-13: Cable Latency (4 bits)
 #define CABLE_VDO1_TERMINATION_TYPE  (0x03 << 11)  // Bit 12-11: Cable Termination Type (2 bits)
 #define CABLE_VDO1_MAX_VBUS_MASK     (0x03 << 9)   // Bit 10-9: Maximum VBUS Voltage (2 bits)
+
+/* Cable VDO1 MaxV (Bit10-9) 取值 */
+#define CABLE_MAXV_20V   0x00  // 20V
+#define CABLE_MAXV_50V   0x03  // 50V
 #define CABLE_VDO1_SBU_SUPPORTED     (0x01 << 8)   // Bit 8: SBU Supported
 #define CABLE_VDO1_SBU_TYPE          (0x01 << 7)   // Bit 7: SBU Type
 #define CABLE_VDO1_CURRENT_MASK      (0x03 << 5)   // Bit 6-5: VBUS Current Handling (2 bits)
@@ -183,9 +192,12 @@ uint8_t EMarker_Read_Info(uint8_t vconn_cc, uint8_t pd_comm_cc, emarker_info_t *
 /**
  * @brief  完整的E-Mark检测流程（高层API）
  * @param  info: E-Mark信息结构指针
- * @return 0-成功, 1-无E-Mark, 2-PD通信失败
+ * @return EMARK_OK-成功, EMARK_NOT_FOUND-无E-Mark, EMARK_PD_FAIL-PD通信失败
  * @note   自动完成检测、VCONN控制、PD通信全流程
  */
+#define EMARK_OK          0   /* 成功 */
+#define EMARK_NOT_FOUND   1   /* 未检测到E-Mark */
+#define EMARK_PD_FAIL     2   /* PD通信失败(发送失败/超时/解析失败) */
 uint8_t EMarker_Full_Detect(emarker_info_t *info);
 
 /**

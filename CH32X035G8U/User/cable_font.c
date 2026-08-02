@@ -3,14 +3,14 @@
  * Author             : CableTester Team
  * Version            : V1.0.0
  * Date               : 2026/04/30
- * Description        : Font data for CableTester TFT display (5x7 and 8x16 fonts)
+ * Description        : Font data for CableTester TFT display (5x8, 8x16 and 12x24 fonts)
  *********************************************************************************/
 
 #include "cable_font.h"
 
-/* ==================== 5x7 字体数据 ==================== */
-/* ASCII 0x20-0x7E, 共95个字符，每个字符5字节 */
-static const uint8_t Font5x7_Data[][5] = {
+/* ==================== 5x8 字体数据 ==================== */
+/* ASCII 0x20-0x7E, 共95个字符，每个字符5字节（5列×8行，每列1字节表示8行像素） */
+static const uint8_t Font5x8_Data[][5] = {
     {0x00, 0x00, 0x00, 0x00, 0x00}, // 20 'space'
     {0x00, 0x00, 0x2f, 0x00, 0x00}, // 21 '!'
     {0x00, 0x07, 0x00, 0x07, 0x00}, // 22 '"'
@@ -108,16 +108,16 @@ static const uint8_t Font5x7_Data[][5] = {
     {0x08, 0x10, 0x08, 0x04, 0x08}, // 7E '~'
 };
 
-/* 5x7字体信息 */
-const font_info_t Font5x7_Info = {
+/* 5x8字体信息 */
+const font_info_t Font5x8_Info = {
     .width = 5,
-    .height = 7,
+    .height = 8,
     .first_char = 0x20,
     .char_count = 95,
-    .data = (const uint8_t *)Font5x7_Data};
+    .data = (const uint8_t *)Font5x8_Data};
 
 /* ==================== 8x16 字体数据 ==================== */
-/* ASCII 0x20-0x7E, 共95个字符，每个字符16字节（按列存储，与5x7格式一致） */
+/* ASCII 0x20-0x7E, 共95个字符，每个字符16字节（按列存储，与5x8格式一致） */
 /* 每列16位，用2字节表示（小端序）：bytes[0-1]=col0, bytes[2-3]=col1, ..., bytes[14-15]=col7 */
 static const uint8_t Font8x16_Data[][16] = {
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // 20 'space'
@@ -345,14 +345,14 @@ const font_info_t Font12x24_Info = {
 const font_info_t *Font_GetInfo(font_type_t type)
 {
     switch (type) {
-    case FONT_5x7:
-        return &Font5x7_Info;
+    case FONT_5x8:
+        return &Font5x8_Info;
     case FONT_8x16:
         return &Font8x16_Info;
     case FONT_12x24:
         return &Font12x24_Info;
     default:
-        return &Font5x7_Info;  // 默认返回5x7字体
+        return &Font5x8_Info;  // 默认返回5x8字体
     }
 }
 

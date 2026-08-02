@@ -513,13 +513,13 @@ void EMarker_Parse_ID_Header(uint32_t id_header, emarker_info_t *info)
     // 判断线缆类型
     switch (product_type) {
         case PRODUCT_TYPE_PASSIVE_CABLE:
-            info->cable_type = 0;  // 被动线缆
+            info->cable_type = CABLE_TYPE_PASSIVE;  // 被动线缆
             break;
         case PRODUCT_TYPE_ACTIVE_CABLE:
-            info->cable_type = 1;  // 主动线缆
+            info->cable_type = CABLE_TYPE_ACTIVE;  // 主动线缆
             break;
         default:
-            info->cable_type = 2;  // 未知
+            info->cable_type = CABLE_TYPE_UNKNOWN;  // 未知
             break;
     }
 
@@ -727,12 +727,12 @@ uint8_t EMarker_Full_Detect(emarker_info_t *info)
     uint8_t ret;
 
     if (info == NULL) {
-        return 1;
+        return EMARK_NOT_FOUND;
     }
 
     // 步骤1: 检测E-Mark并确定CC通道（一次性完成）
     if (!EMarker_Detect_CC_Channel(&vconn_cc, &pd_comm_cc)) {
-        return 1;  // 无E-Mark
+        return EMARK_NOT_FOUND;  // 无E-Mark
     }
 
     // 步骤2: 初始化PD通信（在VCONN供电前完成，避免引脚状态变化影响E-Mark）
@@ -746,7 +746,7 @@ uint8_t EMarker_Full_Detect(emarker_info_t *info)
     ret = EMarker_Send_Discover_Identity();
     if (ret != 0) {
         EMarker_Disable_VCONN();
-        return 2;  // 发送失败
+        return EMARK_PD_FAIL;  // 发送失败
     }
 
     // 步骤5: 重新进入接收模式，等待E-Mark的VDM响应
@@ -756,7 +756,7 @@ uint8_t EMarker_Full_Detect(emarker_info_t *info)
     ret = PD_Wait_Response(PD_COMM_TIMEOUT_MS);
     if (ret != 0) {
         EMarker_Disable_VCONN();
-        return 2;  // 超时
+        return EMARK_PD_FAIL;  // 超时
     }
 
     // 步骤7: 提取Message ID并立即发送GoodCRC
@@ -773,8 +773,8 @@ uint8_t EMarker_Full_Detect(emarker_info_t *info)
     EMarker_Disable_VCONN();
 
     if (ret != 0) {
-        return 2;  // PD通信失败
+        return EMARK_PD_FAIL;  // PD通信失败
     }
 
-    return 0;  // 成功
+    return EMARK_OK;  // 成功
 }

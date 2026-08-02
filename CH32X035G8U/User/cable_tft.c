@@ -402,31 +402,31 @@ void TFT_DrawString_Font(uint16_t x, uint16_t y, const char *str, uint16_t color
 }
 
 /**
- * @brief  绘制一个字符（兼容旧接口，默认使用5x7字体）
+ * @brief  绘制一个字符（兼容旧接口，默认使用5x8字体）
  * @param  x, y: 坐标
  * @param  c: 字符
  * @param  color: 前景色
  * @param  bg: 背景色
  * @return none
- * @note   此函数为向后兼容保留，内部调用TFT_DrawChar_Font并指定FONT_5x7
+ * @note   此函数为向后兼容保留，内部调用TFT_DrawChar_Font并指定FONT_5x8
  *         如需指定其他字体，请使用TFT_DrawChar_Font函数
  */
 void TFT_DrawChar(uint16_t x, uint16_t y, char c, uint16_t color, uint16_t bg)
 {
-    TFT_DrawChar_Font(x, y, c, color, bg, FONT_5x7);
+    TFT_DrawChar_Font(x, y, c, color, bg, FONT_5x8);
 }
 
 /**
- * @brief  绘制字符串（兼容旧接口，默认使用5x7字体）
+ * @brief  绘制字符串（兼容旧接口，默认使用5x8字体）
  * @param  x, y: 坐标
  * @param  str: 字符串
  * @param  color: 前景色
  * @param  bg: 背景色
  * @return none
- * @note   此函数为向后兼容保留，内部调用TFT_DrawString_Font并指定FONT_5x7
+ * @note   此函数为向后兼容保留，内部调用TFT_DrawString_Font并指定FONT_5x8
  *         如需指定其他字体，请使用TFT_DrawString_Font函数
  */
 void TFT_DrawString(uint16_t x, uint16_t y, const char *str, uint16_t color, uint16_t bg)
 {
-    TFT_DrawString_Font(x, y, str, color, bg, FONT_5x7);
+    TFT_DrawString_Font(x, y, str, color, bg, FONT_5x8);
 }

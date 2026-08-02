@@ -1,104 +1,145 @@
 # USB线缆测试仪 (CableTester)
 
-## 功能
+基于CH32X035G8U的USB线缆测试仪。插入线缆即可一键检测：**所有信号线通断、电源线电阻、E-Mark芯片信息、华为快充线**，结果在TFT彩屏上实时显示。
 
-- 两组测试接口：Type-A + Type-C（左侧）、Micro-B + Type-C（右侧）
-- 支持Type-C全信号通断测试：屏蔽层(EH)、VBUS/GND、CC、SBU、D+/D-、TX1/2、RX1/2
-- 电源线电阻测量：双通道自动切换，0~900mΩ（高精度）和900mΩ~100Ω量程
-- CC通断检测（合并测试）
-- **USB PD协议读取E-Mark芯片详细信息**（线缆类型、速度等级、电流能力、EPR、VID/PID、线缆长度、硬件/固件版本、VDO原始值）
-- 屏蔽层连通性及对地短路检测
-- 快充协议识别（华为56k电阻检测）
-- USB供电和通信
-- 1个按键切换两种显示模式（合并通断/电阻/快充 → E-Mark信息）
+**功能特性**：
 
-## 固件代码
+- **主控**：CH32X035G8U（RISC-V RV32IMAC，48MHz）
+- **屏幕**：ST7735S 160×80 彩色 TFT
+- **交互**：1 个按键切换显示模式
+- **两组测试接口**：Type-A + Type-C（左侧）、Micro-B + Type-C（右侧）
+- **Type-C 全信号通断测试**：屏蔽层(EH)、VBUS/GND、CC、SBU、D+/D-、TX1/2、RX1/2
+- **电源线电阻测量**：两挡位自动切换，0~900mΩ 高精度 + 900mΩ~100Ω 量程，纯整数运算
+- **E-Mark 芯片信息**：USB PD 协议读取（线缆类型、速度等级、电流能力、EPR、VID/PID、线缆长度、硬件/固件版本、VDO 原始值）
+- **华为快充线识别**：56kΩ 电阻检测
 
-### 主要功能模块
+---
 
-1. **GPIO模块** (`cable_gpio.c/h`) — 引脚初始化、测试电压控制(PMOS)、CC_E驱动、VCONN供电
-2. **ADC模块** (`cable_adc.c/h`) — 双通道ADC（V_PWR_L/V_PWR_H）、电阻计算、自动挡位切换
-3. **TFT显示模块** (`cable_tft.c/h`) — ST7735S驱动、多字体渲染、结果展示
-4. **测试模块** (`cable_test.c/h`) — 通断测试、电阻测量状态机、E-Mark检测、快充识别
-5. **E-Mark PD通信模块** (`emarker_pd.c/h`) — USB PD协议栈、Discover Identity、VDM解析、VCONN控制
+## 快速上手
 
-### 编译和下载
+1. **供电**：将 USB-C 供电口接入 5V 电源（C-C线或A-C线均可）
+2. **插线**：将双头线缆两端分别插入左侧/右侧测试口
+3. **切换模式**：短按 `KEY` 键在「通断模式」与「E-Mark 模式」之间切换
+4. **观察屏幕**：见下方示例
 
-**硬件需求**：
-- CH32X035G8U目标板
-- WCH-Link调试器
-- USB-C数据线（供电和调试）
+---
 
-**软件需求**：
-- MounRiver Studio（推荐）或 WCH IDE
-- WCH-Link驱动程序
+## 界面示例
 
-**编译步骤**：
-1. 打开MounRiver Studio，选择 `File → Import → Existing Projects into Workspace`
-2. 浏览到 `CH32X035G8U` 目录，点击 `Finish`
-3. 确认以下源文件已添加到工程：`main.c`、`cable_gpio.c/h`、`cable_adc.c/h`、`cable_spi.c/h`、`cable_tft.c/h`、`cable_test.c/h`、`emarker_pd.c/h`、`cable_font.c/h`
-4. 确认芯片型号为CH32X035G8U，时钟频率48MHz
-5. 点击编译（`Ctrl+B`），确认控制台输出 `BUILD SUCCESSFUL`
+### 通断模式（默认）
 
-**下载步骤**：
-1. 连接WCH-Link到电脑USB口
-2. 连接WCH-Link到目标板：DIO→PC18，DCK→PC19，GND→GND
-3. 在IDE中选择 `Run → Debug`（F11），程序自动下载并运行
+```
+┌───────────────────────────────────┐  160×80
+│ ● FULL FEAT        HUAWEI 5A      │  ← 线缆等级 / 快充状态
+├───────────────────────────────────┤
+│        R: 123 mΩ                  │  ← 电源线电阻（12×24 大字体）
+├───────────────────────────────────┤
+│ ■ D+- ■ CC ■ SBU ■ SHLD           │  ← 信号通断
+│ ■ TX1 ■ RX1 ■ TX2 ■ RX2           │     绿=通 / 红=断
+├───────────────────────────────────┤
+│ E-Marker: 5A      USB 3.2 Gen2    │  ← E-Mark 摘要 / 速率
+└───────────────────────────────────┘
+```
 
-**验证**：TFT屏幕显示"Welcome"欢迎界面。如屏幕无显示，检查电源和TFT连接线。
+- 等级颜色：`TYPE-C FULL`=绿（全功能） / `USB 3.2`/`USB 3.0`=青 / `USB 2.0`=黄 / `POWER ONLY`=橙 / `OPEN`=红
+- 电阻颜色：<100mΩ 绿 / 100~150 黄 / 150~200 橙 / 200~500 红 / ≥500mΩ 或开路（`----`）白
+- 快充：`HUAWEI 5A` 紫色显示（与华为 5A 线缆插头同色）
 
-## 文档
+### E-Mark 模式
 
-- **详细设计文档**: [doc/CableTester_Design.md](doc/CableTester_Design.md)
-- **CH32X035数据手册**: [doc/CH32X035DS0.PDF](doc/CH32X035DS0.PDF)
-- **CH32X035参考手册**: [doc/CH32X035RM.PDF](doc/CH32X035RM.PDF)
+```
+┌───────────────────────────────────┐  160×80
+│ E-Mark: YES          Passive      │  ← E-Mark 存在性 / 线缆类型
+├───────────────────────────────────┤
+│ USB 3.2 Gen2            5A        │  ← 速率等级 / 电流能力
+├───────────────────────────────────┤
+│ EPR: Yes    MaxV: 20V              │  ← EPR 支持 / 最大电压
+│ SBU: Yes    Len: ~1m               │  ← SBU 支持 / 线缆长度
+│ VID: 0xFFFF PID: 0xFFFF            │  ← Vendor ID / Product ID
+│ HW: 0x1     FW: 0x1                │  ← 硬件 / 固件版本
+│ VDO: 12345678 87654321             │  ← Cable VDO 原始值
+└───────────────────────────────────┘
+```
 
-## E-Mark PD通信功能
+- `E-Mark: NO`：线缆无 E-Mark 芯片；`PD Comm Failed`：检测到芯片但通信失败
+- 速率色阶：USB2.0=灰 / USB3.2 Gen1-Gen2=青 / USB4 Gen3-Gen4=绿
 
-### 功能概述
-本项目的E-Mark检测功能已升级为完整的USB PD协议通信，可以读取E-Mark芯片的详细信息，包括：线缆类型（被动/主动）、USB速度等级（USB 2.0~USB4 Gen4）、电流能力（3A/5A）、EPR支持状态、Vendor ID和Product ID、线缆长度（由Cable VDO1 Latency位近似）、硬件/固件版本及全部VDO原始值。
-
-### 使用方法
-在MODE_EMARK显示模式下，系统自动完成：
-1. 检测E-Mark芯片存在性
-2. 使能VCONN供电（PC3或PC0，等待50ms稳定）
-3. 配置PD通信CC线为Rp上拉
-4. 通过USBPD硬件发送Discover Identity VDM命令
-5. 接收GoodCRC确认，解析VDM响应
-6. 在TFT上显示线缆详细信息
-7. 关闭VCONN
-
-### 校验方法
-使用**双头Type-C线缆**（全功能线），两端分别插入测试仪左右接口，按下KEY键切换至E-Mark模式观察显示。
-
-### 故障排查
-| 现象 | 可能原因 | 解决 |
-|------|---------|------|
-| 显示"E-Mark: NO" | 线缆不支持E-Mark | 换全功能USB3/4线缆测试 |
-| 显示"PD Comm Failed" | VCONN时序问题 | 检查VCONN与PD通信通道逆关系是否正确 |
-| 通信超时 | CC_LVE未正确控制 | 确认发送后禁用LVE恢复恒流源模式 |
-
-### 支持的E-Mark芯片
-符合USB-IF标准的所有E-Mark芯片（Cypress CYPD3177、TI TPS65987D、CH224K等）。
+---
 
 ## 故障排查
 
-| 问题 | 可能原因 | 解决 |
+| 现象 | 可能原因 | 解决 |
 |------|---------|------|
-| 屏幕无显示 | TFT连接错误 | 检查SPI线：CS→PA4, SCK→PA5, SDA→PA7, RS→PA6 |
-| 屏幕无显示 | TFT供电异常 | 检查3.3V供电 |
-| 电阻显示"----" | 线缆未正常连接 | 确保两端都插到位 |
+| 屏幕无显示 | TFT 连接/供电异常 | 检查 3.3V 供电与 SPI 接线（CS→PA4, SCK→PA5, SDA→PA7, RS→PA6） |
+| 电阻显示 `----` | 线缆未正常连接 | 确保两端都插到位 |
 | 电阻测量偏差大 | 接触不良 | 清洁接口触点 |
-| 按键无响应 | 引脚配置错误 | 确认KEY连接至PA3(KEY_M) |
-| 下载失败 | WCH-Link连接 | 检查SWD线：DIO→PC18, DCK→PC19 |
+| 显示 `E-Mark: NO` | 线缆不支持 E-Mark | 换全功能 USB3/4 线缆测试 |
+| 显示 `PD Comm Failed` | VCONN 时序问题 | 检查 VCONN 与 PD 通信通道逆关系是否正确 |
+| 快充不识别 | 非华为线/接触不良 | 使用华为 5A 线缆并确保插紧 |
+| 按键无响应 | 引脚配置错误 | 确认 KEY 连接至 PA3(KEY_M) |
+| 下载失败 | WCH-Link 连接 | 检查 SWD 线：DIO→PC18, DCK→PC19 |
+
+---
+
+## 开发者指南
+
+### 目录结构
+
+```
+CH32X035G8U/
+├── Startup/     # 启动文件（向量表、复位处理）
+├── Core/        # RISC-V 核心初始化（时钟、延时）
+├── Peripheral/  # WCH HAL 库（GPIO/ADC/SPI/USBPD 等）
+├── Debug/       # printf 串口调试
+├── User/        # 应用代码
+│   ├── main.c           # SysTick(1ms)、初始化、主循环
+│   ├── cable_gpio.c/h   # 引脚配置、电源控制、CC_E 驱动
+│   ├── cable_adc.c/h    # 双通道 ADC、电阻计算、自动量程
+│   ├── cable_spi.c/h    # 硬件 SPI1 驱动 TFT
+│   ├── cable_tft.c/h    # ST7735S 驱动、多字体渲染
+│   ├── cable_test.c/h   # 测试状态机、按键、双模式显示
+│   ├── emarker_pd.c/h   # USB PD 协议、E-Mark 通信
+│   └── cable_font.c/h   # 点阵字库（5×8/8×16/12×24）
+└── Ld/Link.ld           # 链接脚本（62K Flash / 20K RAM）
+```
+
+### 构建
+
+在 MounRiver Studio 中，打开 `CH32X035G8U.wvproj` 工程 → 点击`编译`。注意 `obj/` 下 Makefile 由 IDE 自动生成，勿手工修改。
+
+或使用命令行方式：
+
+```bash
+cd CH32X035G8U/obj
+make -j16 all
+```
+
+产物：`obj/CH32X035G8U.elf`（另含 `.hex`/`.lst`/`.map`）。工具链：`riscv-none-embed-gcc`（GCC 8.2.0，`-march=rv32imacxw -mabi=ilp32`，`-Os`）。
+
+### 下载与调试
+
+- 使用 WCH-Link：DIO→PC18，DCK→PC19，GND→GND
+- MounRiver Studio 内 `Run → Debug`（F11）自动下载运行
+- 命令行调试：OpenOCD（`wch-riscv.cfg`）+ GDB（端口 3333）
+
+---
+
+## 文档
+
+- **详细设计文档**: [doc/CableTester_Design.md](doc/CableTester_Design.md)（含 USB PD 位域定义附录）
+- **CH32X035 数据手册**: [doc/CH32X035DS0.PDF](doc/CH32X035DS0.PDF)
+- **CH32X035 参考手册**: [doc/CH32X035RM.PDF](doc/CH32X035RM.PDF)
+
+---
 
 ## 版本历史
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | V1.0 | 2026-04-26 | 初始版本，完成固件代码开发 |
-| **V3.1** | **2026-05-05** | **新增E-Mark PD通信功能，支持读取详细信息** |
-| **V3.2** | **2026-08-02** | **E-Mark界面重排（2列对齐布局、类型入标题栏、长度/HW-FW/Product ID解析）、显示配色统一、电阻数值与单位宽度对齐** |
+| V1.1 | 2026-05-05 | 支持 E-Mark PD 通信功能，支持读取详细信息 |
+| V2.0 | 2026-07-26 | 新硬件版本适配 |
+| V2.1 | 2026-08-02 | 界面美化 |
 
 ## 许可证
 

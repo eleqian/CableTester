@@ -17,6 +17,13 @@
 extern "C" {
 #endif
 
+/* 快充检测类型 */
+typedef enum {
+    FAST_CHARGE_NONE = 0,    // 无快充
+    FAST_CHARGE_HUAWEI_1CC,  // Huawei单CC检测(2.9~3.1V)
+    FAST_CHARGE_HUAWEI_2CC   // Huawei双CC检测(2.7~2.9V)
+} fast_charge_type_t;
+
 /* 测试结果结构 */
 typedef struct {
     uint8_t power_ok;          // VBUS和GND检测: 1=回路通(测量有效), 0=开路
@@ -31,7 +38,7 @@ typedef struct {
     uint8_t shield_ok;         // 屏蔽层(EH)检测
     uint32_t resistance_mohm;  // 电阻值(mΩ), 开路时为RES_SATURATED
     uint8_t has_emark;         // 是否检测到E-Mark芯片: 1=有, 0=无
-    uint8_t fast_charge;       // 快充检测: 0=无, 1=Huawei单CC, 2=Huawei双CC
+    uint8_t fast_charge;       // 快充检测: 见fast_charge_type_t枚举
 
     // E-Mark详细信息（仅has_emark && emark.valid时有效）
     emarker_info_t emark;      // E-Mark芯片信息（嵌套结构, 直接整体拷贝, 避免逐字段冗余赋值）

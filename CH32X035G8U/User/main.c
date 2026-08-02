@@ -101,7 +101,7 @@ int main(void)
     System_Init();
 
     // 显示欢迎界面
-    // TFT_ShowWelcome();
+    TFT_ShowWelcome();
 
     // 主循环（无阻塞）
     while (1) {

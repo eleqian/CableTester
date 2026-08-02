@@ -53,7 +53,7 @@ void TFT_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color
 void TFT_DrawChar_Font(uint16_t x, uint16_t y, char c, uint16_t color, uint16_t bg, font_type_t font);
 void TFT_DrawString_Font(uint16_t x, uint16_t y, const char *str, uint16_t color, uint16_t bg, font_type_t font);
 
-// 兼容旧接口（默认使用FONT_5x7字体，保持向后兼容）
+// 兼容旧接口（默认使用FONT_5x8字体，保持向后兼容）
 void TFT_DrawChar(uint16_t x, uint16_t y, char c, uint16_t color, uint16_t bg);
 void TFT_DrawString(uint16_t x, uint16_t y, const char *str, uint16_t color, uint16_t bg);
 

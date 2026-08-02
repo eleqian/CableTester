@@ -9,7 +9,7 @@ extern "C" {
 
 /* 字体类型枚举 */
 typedef enum {
-    FONT_5x7 = 0,   // 5x7点阵字体（紧凑）
+    FONT_5x8 = 0,   // 5x8点阵字体（紧凑，实际高度为8像素）
     FONT_8x16,      // 8x16点阵字体（清晰）
     FONT_12x24,     // 12x24点阵字体（大字体）
     FONT_MAX
