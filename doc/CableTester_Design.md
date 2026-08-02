@@ -587,9 +587,9 @@ typedef struct {
 ```
 
 **PD通信步骤**：
-1. 检测E-Mark所在CC通道 → 确定VCONN供电和PD通信通道（逆关系）
+1. 检测E-Mark所在CC通道 → 确定VCONN供电和PD通信通道（逆关系，见3.4.1）
 2. 使能VCONN供电（PC3或PC0），等待50ms稳定
-3. 在PD通信CC线上配置Rp上拉（CC_PU_330）
+3. 在PD通信CC线上配置Rp上拉（CC_PU_330），并设置USBPD CC_SEL为PD通信通道（EMarker_Set_CC_Channel）
 4. USBPD发送Discover Identity VDM命令（SOP'寻址Cable Plug）
 5. 接收GoodCRC，发送GoodCRC确认
 6. 接收VDM响应，解析Cable VDO1等数据
@@ -709,6 +709,9 @@ static uint32_t resistance_sum;
 ③ 使能VCONN供电（逆关系）：
    - E-mark在CC1 → VCONN经PC3供电，PD通信走CC2(PC15)
    - E-mark在CC2 → VCONN经PC0供电，PD通信走CC1(PC14)
+   - 同时设置USBPD CONFIG的CC_SEL为PD通信通道（EMarker_Set_CC_Channel；
+     复位默认CC1，漏设此位时翻面后PD通信应走CC2而命令仍发往CC1，
+     表现为"检测到E-Marker但读取失败"，必现）
    等待50ms让E-mark芯片上电稳定
 
 ④ 在PD通信CC线上配置Rp上拉（CC_PU_330）
@@ -724,14 +727,14 @@ static uint32_t resistance_sum;
 
 #### 3.4.1 VCONN与PD通信通道关系
 
-USB Type-C规范要求VCONN供电与PD通信使用不同CC通道：
+USB Type-C规范要求VCONN供电与PD通信使用不同CC通道（本设计实测为逆关系）：
 
 ```
 VCONN在CC1 → PD通信使用CC2（PC15）
 VCONN在CC2 → PD通信使用CC1（PC14）
 ```
 
-VCONN经辅助GPIO（PC3或PC0）供电，PD通信走USBPD硬件引脚（PC14或PC15），形成逆关系。VCONN使能后需等待至少50ms，待E-Mark芯片上电稳定后再配置PD通信。
+VCONN经辅助GPIO（PC3或PC0）供电，PD通信走USBPD硬件引脚（PC14或PC15），形成逆关系。**必须将USBPD CONFIG的CC_SEL设置为PD通信通道**（`EMarker_Set_CC_Channel(pd_comm_cc)`）：复位值0=CC1，若不设置，线缆翻面后E-Mark在CC1、PD通信应走CC2时命令仍发往CC1直通线，表现为"检测到E-Marker但读取失败"（必现）。VCONN使能后需等待至少50ms，待E-Mark芯片上电稳定后再配置PD通信。
 
 #### 3.4.2 CC_LVE寄存器控制
 

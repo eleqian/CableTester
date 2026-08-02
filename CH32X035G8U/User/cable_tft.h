@@ -37,6 +37,8 @@ extern "C" {
 #define COLOR_CYAN      0x07FF
 #define COLOR_MAGENTA   0xF81F
 #define COLOR_GRAY      0x8410
+#define COLOR_ORANGE    0xFA00
+#define COLOR_DARK_GRAY 0x4208
 
 /* 函数声明 */
 void TFT_Init(void);

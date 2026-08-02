@@ -125,7 +125,7 @@ typedef struct {
  * @param  vconn_cc: VCONN所在的CC通道 (1=CC1, 2=CC2)
  * @param  pd_comm_cc: PD通信使用的CC通道 (1=CC1, 2=CC2)
  * @return none
- * @note   根据VCONN和PD通信通道正确配置CC端口
+ * @note   根据VCONN和PD通信通道正确配置CC端口，并将CC_SEL设为pd_comm_cc
  */
 void EMarker_PD_Init(uint8_t vconn_cc, uint8_t pd_comm_cc);
 
@@ -141,9 +141,11 @@ uint8_t EMarker_Detect_Chip(void);
  * @param  vconn_cc: 输出参数，VCONN应该在哪个CC (1=CC1, 2=CC2)
  * @param  pd_comm_cc: 输出参数，PD通信应该使用哪个CC (1=CC1, 2=CC2)
  * @return 1-存在E-mark, 0-不存在
- * @note   根据USB Type-C规范：
- *         - 如果E-Mark在CC1上，VCONN给CC1供电，PD通信使用CC2
- *         - 如果E-Mark在CC2上，VCONN给CC2供电，PD通信使用CC1
+ * @note   根据USB Type-C规范（本设计实测为逆关系）：
+ *         - E-Mark在CC1上 → VCONN给CC1供电，PD通信使用CC2
+ *         - E-Mark在CC2上 → VCONN给CC2供电，PD通信使用CC1
+ *         注意：EMarker_PD_Init内部必须将CC_SEL设为pd_comm_cc，
+ *         否则翻面后命令发往错误通道，表现为"检测到E-Marker但读取失败"（必现）
  */
 uint8_t EMarker_Detect_CC_Channel(uint8_t *vconn_cc, uint8_t *pd_comm_cc);
 

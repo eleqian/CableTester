@@ -286,6 +286,7 @@ void EMarker_PD_Init(uint8_t vconn_cc, uint8_t pd_comm_cc)
     AFIO->CTLR |= USBPD_IN_HVT | USBPD_PHY_V33;
 
     // 初始化USBPD寄存器
+    USBPD->CONTROL = 0;                  // 清除CONTROL（停止BMC/TX）
     USBPD->CONFIG = PD_DMA_EN;
     USBPD->STATUS = BUF_ERR | IF_RX_BIT | IF_RX_BYTE | IF_RX_ACT | IF_RX_RESET | IF_TX_END;
 
@@ -298,18 +299,21 @@ void EMarker_PD_Init(uint8_t vconn_cc, uint8_t pd_comm_cc)
 
     // 配置CC1/CC2端口
     // VCONN供电的CC线：不需要配置（由VCONN供电，E-Mark已上电）
-    // PD通信的CC线：配置为上拉（Rp），作为SRC等待E-Mark响应
+    // PD通信的CC线：作为SRC等待E-Mark响应
     if (pd_comm_cc == 1) {
-        // PD通信使用CC1，配置为上拉
+        // PD通信使用CC1
         // USBPD->PORT_CC1 = CC_CMP_66 | CC_PU_330;  // Rp上拉
         USBPD->PORT_CC1 = CC_CMP_66 | CC_LVE;
         USBPD->PORT_CC2 = CC_CMP_66;              // CC2不配置（VCONN供电）
     } else {
-        // PD通信使用CC2，配置为上拉
+        // PD通信使用CC2
         USBPD->PORT_CC1 = CC_CMP_66;              // CC1不配置（VCONN供电）
         // USBPD->PORT_CC2 = CC_CMP_66 | CC_PU_330;  // Rp上拉
         USBPD->PORT_CC2 = CC_CMP_66 | CC_LVE;
     }
+
+    // USBPD硬件通信通道(CC_SEL)设为PD通信通道(pd_comm_cc)。
+    EMarker_Set_CC_Channel(pd_comm_cc);
 
     // 进入接收模式
     PD_Enter_Rx_Mode();
@@ -577,7 +581,7 @@ uint8_t EMarker_Detect_CC_Channel(uint8_t *vconn_cc, uint8_t *pd_comm_cc)
 
     // 初始化默认值
     *vconn_cc = 1;   // 默认VCONN在CC1
-    *pd_comm_cc = 2; // 默认PD通信使用CC2
+    *pd_comm_cc = 2; // 默认PD通信使用CC2（与VCONN逆关系）
 
     // 临时初始化USBPD模块用于检测
     // RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC, ENABLE);
@@ -594,6 +598,7 @@ uint8_t EMarker_Detect_CC_Channel(uint8_t *vconn_cc, uint8_t *pd_comm_cc)
     AFIO->CTLR |= USBPD_IN_HVT | USBPD_PHY_V33;
 
     // 初始化USBPD寄存器
+    USBPD->CONTROL = 0;                  // 清除CONTROL（停止BMC/TX）
     USBPD->CONFIG = PD_DMA_EN;
     USBPD->STATUS = BUF_ERR | IF_RX_BIT | IF_RX_BYTE | IF_RX_ACT | IF_RX_RESET | IF_TX_END;
 
@@ -611,7 +616,10 @@ uint8_t EMarker_Detect_CC_Channel(uint8_t *vconn_cc, uint8_t *pd_comm_cc)
     uint8_t cc1_has_rd = !(cc1_status & PA_CC_AI);  // CC1有Rd下拉
     uint8_t cc2_has_rd = !(cc2_status & PA_CC_AI);  // CC2有Rd下拉
 
-    // 根据检测结果确定VCONN和PD通信通道
+    // 根据检测结果确定VCONN和PD通信通道：
+    //   E-Mark在CC1 → VCONN=CC1、PD通信=CC2
+    //   E-Mark在CC2 → VCONN=CC2、PD通信=CC1
+    // EMarker_PD_Init内部将CC_SEL设为pd_comm_cc
     if (cc1_has_rd && !cc2_has_rd) {
         // E-Mark在CC1上
         has_emark = 1;

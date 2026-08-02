@@ -15,6 +15,9 @@ typedef enum {
     FONT_MAX
 } font_type_t;
 
+/* 扩展字符定义（紧接ASCII '~'后的第96个字符） */
+#define CHAR_OMEGA 0x7F  /* 欧姆符号 Ω */
+
 /* 字体信息结构 */
 typedef struct {
     uint8_t width;        // 字符宽度

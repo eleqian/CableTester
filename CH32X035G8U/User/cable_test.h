@@ -38,8 +38,14 @@ typedef struct {
     uint8_t usb_speed;
     uint8_t current_capability;
     uint8_t epr_capable;
+    uint8_t usb_version;          // USB版本 (Cable VDO1 Bit23-21)
     uint16_t vendor_id;
     uint16_t product_id;
+    uint32_t id_header;           // ID Header原始值
+    uint32_t cert_stat;           // Cert Stat VDO
+    uint32_t product_vdo;         // Product VDO
+    uint32_t cable_vdo1;          // Cable VDO1原始值
+    uint32_t cable_vdo2;          // Cable VDO2原始值
 } test_result_t;
 
 /* 显示模式枚举（V3.0：仅两种模式） */
@@ -63,6 +69,8 @@ uint8_t Key_Scan_With_Debounce(void);
 void Switch_Display_Mode(void);
 void Test_State_Machine(void);
 void TFT_ShowTestResult(test_result_t *result, display_mode_t mode);
+void TFT_ShowContinuity(test_result_t *result);
+void TFT_ShowEmark(test_result_t *result);
 void TFT_ShowWelcome(void);
 
 #ifdef __cplusplus
