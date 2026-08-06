@@ -55,7 +55,7 @@ extern "C" {
 /*
  * V_PWR_EN (PB6)：PMOS栅极控制，低电平使能测试电压。
  * V_PWR_L (PB0)：经101倍运放同相放大后输入ADC（0~900mΩ高精度量程）。
- * V_PWR_H (PB1)：未经放大的VBUS直接ADC输入（900mΩ~100Ω量程）。
+ * V_PWR_H (PB1)：未经放大的VBUS直接ADC输入（900mΩ~9.99kΩ量程）。
  * 两通道自动切换，阈值3686(≈900mΩ)，带回差33(≈800mΩ)。
  */
 #define V_PWR_EN_PIN      GPIO_Pin_6    /* PB6 - PMOS使能                     */

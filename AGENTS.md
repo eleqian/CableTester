@@ -41,7 +41,7 @@ CH32X035G8U/
 
 - **Main loop is non-blocking**: 1ms SysTick drives `system_tick_ms`. `Test_State_Machine()` in `cable_test.c` handles resistance measurement as a state machine. Never add blocking delays.
 - **Two display modes**: `MODE_CONTINUITY` (shows continuity + resistance + fast charge on one screen) and `MODE_EMARK` (shows E-Mark info).
-- **Resistance measurement**: 100Ω series resistor through VBUS/GND loop. Two ADC channels: 101x for <1Ω, 1x for up to 100Ω. Auto-switch with hysteresis. Measurement active ~55ms per 1s cycle.
+- **Resistance measurement**: 100Ω series resistor through VBUS/GND loop. Two ADC channels: 101x for <1Ω, 1x for up to 9.99kΩ. Auto-switch with hysteresis. Measurement active ~55ms per 1s cycle.
 - **VCONN / PD channel relationship** (critical): VCONN is driven on **auxiliary CC GPIO pins** (PC3 for CC1, PC0 for CC2). USBPD hardware uses dedicated pins (PC14 for CC1, PC15 for CC2). If E-Mark is on CC1, VCONN goes on PC3 and PD communication uses CC2 (PC15). This is an inverse relationship.
 
 ## Documentation (repo-specific, not generic)

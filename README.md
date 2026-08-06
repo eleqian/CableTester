@@ -9,7 +9,7 @@
 - **交互**：1 个按键切换显示模式
 - **两组测试接口**：Type-A + Type-C（左侧）、Micro-B + Type-C（右侧）
 - **Type-C 全信号通断测试**：屏蔽层(EH)、VBUS/GND、CC、SBU、D+/D-、TX1/2、RX1/2
-- **电源线电阻测量**：两挡位自动切换，0~900mΩ 高精度 + 900mΩ~100Ω 量程，纯整数运算
+- **电源线电阻测量**：两挡位自动切换，0~900mΩ 高精度 + 900mΩ~9.99kΩ 量程，纯整数运算
 - **E-Mark 芯片信息**：USB PD 协议读取（线缆类型、速度等级、电流能力、EPR、VID/PID、线缆长度、硬件/固件版本、VDO 原始值）
 - **华为快充线识别**：56kΩ 电阻检测
 
@@ -30,7 +30,7 @@
 
 ```
 ┌───────────────────────────────────┐  160×80
-│ ● FULL FEAT        HUAWEI 5A      │  ← 线缆等级 / 快充状态
+│ ● USB 2.0          HUAWEI 5A      │  ← 线缆等级 / 快充状态
 ├───────────────────────────────────┤
 │        R: 123 mΩ                  │  ← 电源线电阻（12×24 大字体）
 ├───────────────────────────────────┤
@@ -62,7 +62,7 @@
 ```
 
 - `E-Mark: NO`：线缆无 E-Mark 芯片；`PD Comm Failed`：检测到芯片但通信失败
-- 速率色阶：USB2.0=灰 / USB3.2 Gen1-Gen2=青 / USB4 Gen3-Gen4=绿
+- 速率色阶：USB2.0=黄 / USB3.2 Gen1-Gen2=青 / USB4 Gen3-Gen4=绿
 
 ---
 
@@ -116,11 +116,18 @@ make -j16 all
 
 产物：`obj/CH32X035G8U.elf`（另含 `.hex`/`.lst`/`.map`）。工具链：`riscv-none-embed-gcc`（GCC 8.2.0，`-march=rv32imacxw -mabi=ilp32`，`-Os`）。
 
-### 下载与调试
+### 固件下载
 
-- 使用 WCH-Link：DIO→PC18，DCK→PC19，GND→GND
-- MounRiver Studio 内 `Run → Debug`（F11）自动下载运行
-- 命令行调试：OpenOCD（`wch-riscv.cfg`）+ GDB（端口 3333）
+#### 使用WCH-Link
+
+- SWD引出到了供电USB-C口的SBU引脚，使用转接板连接到WCH-Link/WCH-LinkE
+- 使用WCH-LinkUtility软件下载：[WCH-LinkUtility](https://www.wch.cn/downloads/WCH-LinkUtility_ZIP.html)
+- 或在MounRiver Studio内点击 `下载`（F8）下载
+
+#### 直接使用USB
+
+- 按住ISP按键，再插入供电USB-C口连接电脑
+- 使用WCH ISP软件下载：[WCH-ISP](https://www.wch.cn/downloads/WCHISPTool_Setup_exe.html)
 
 ---
 

@@ -18,11 +18,11 @@ extern "C" {
 /*
  * ADC通道定义
  * 双通道电阻测量：V_PWR_L（101倍放大）用于<900mΩ高精度，
- *                V_PWR_H（未放大）用于900mΩ~100Ω。
+ *                V_PWR_H（未放大）用于900mΩ~9.99kΩ。
  * CC_E2通道用于华为快充检测（PA1上分压测量）。
  */
 #define ADC_CHANNEL_V_PWR_L   ADC_Channel_8  /* PB0 - 运放放大通道（0~900mΩ）    */
-#define ADC_CHANNEL_V_PWR_H   ADC_Channel_9  /* PB1 - 未放大通道（900mΩ~100Ω）   */
+#define ADC_CHANNEL_V_PWR_H   ADC_Channel_9  /* PB1 - 未放大通道（900mΩ~9.99kΩ） */
 #define ADC_CHANNEL_CC_E2     ADC_Channel_1  /* PA1 - CC_E2电压（华为快充检测）  */
 
 #define ADC_RESOLUTION 4095  /* 12位ADC满量程 */

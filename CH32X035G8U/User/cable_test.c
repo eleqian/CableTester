@@ -15,7 +15,7 @@
  *
  * 电阻测量双通道原理：
  *   V_PWR_L (PB0) = 101倍运放同相放大 → 0~900mΩ 高精度（~0.24mΩ/LSB）
- *   V_PWR_H (PB1) = 未放大直接ADC    → 900mΩ~100Ω（~24mΩ/LSB）
+ *   V_PWR_H (PB1) = 未放大直接ADC    → 900mΩ~10kΩ（近10kΩ处分辨率~240mΩ/LSB）
  *   自动切换阈值：V_PWR_L adc > 3686 切至V_PWR_H
  *   回差：V_PWR_H adc < 33 切回V_PWR_L
  *   双通道均饱和（ADC=4095）→ 开路
@@ -42,9 +42,9 @@
 #define OPAMP_GAIN 101
 #define SERIES_RESISTOR 100000
 
-#define RES_CABLE_MAX         100000     /* 有效测量上限(mΩ) = 100Ω             */
+#define RES_CABLE_MAX         10000000    /* 有效测量上限(mΩ) = 10kΩ             */
 #define RES_SATURATED         (RES_CABLE_MAX + 1)  /* 双通道饱和返回值 → OL     */
-#define RES_DISPLAY_MAX_OHM   99          /* 显示上限(Ω): 整数值>=99时显示"----" */
+#define RES_DISPLAY_MAX_MOHM  RES_CABLE_MAX  /* 显示上限(mΩ): >=10kΩ时显示"----" */
 
 /* 当前使用的ADC通道：1=V_PWR_L(放大), 0=V_PWR_H(未放大)，每周期从V_PWR_L开始 */
 static uint8_t use_v_pwr_l_channel;
@@ -411,7 +411,7 @@ static void Resistance_Test_State_Machine(void)
         } else {
             test_result.resistance_mohm = 0;
         }
-        /* 超过100Ω量程判power_ok=0 → 显示"OL" */
+        /* 超过10kΩ量程判power_ok=0 → 显示"----" */
         test_result.power_ok = (test_result.resistance_mohm <= RES_CABLE_MAX) ? 1 : 0;
         resistance_state = RESISTANCE_STATE_COMPLETE;
         break;
@@ -503,13 +503,15 @@ void Test_State_Machine(void)
  *
  * 电阻数值格式化（不含单位，供独立着色）
  * 根据阻值自动选择最佳显示格式：
- *   <1000 mΩ  → "xxx"     (毫欧整数, 右对齐到3字符槽)
- *   >=1000 mΩ → "x.xx"    (欧姆，两位小数, 4字符)
- *   >=10000 mΩ→ "xx.x"    (欧姆，一位小数, 4字符)
- *   OL        → "----"    (开路, 4字符)
- * 数值槽位+1空格+单位合计恒6字符(毫欧3+1+2 / 欧姆4+1+1), 保证两种情况显示宽度对齐
+ *   <1000 mΩ  → "xxx"      (毫欧整数, 右对齐到4字符槽)
+ *   1~9.99Ω   → "x.xx"     (欧姆，两位小数, 右对齐到5字符槽)
+ *   10~99.9Ω  → "xx.x"     (欧姆，一位小数, 右对齐到5字符槽)
+ *   100~999Ω  → "100"~"999"(欧姆整数, 右对齐到5字符槽)
+ *   1k~9.99k  → "1.00"~"9.99" (千欧, 0.01kΩ单位, 恒4字符)
+ *   >=10kΩ/OL → "----"     (超量程/开路, 右对齐到5字符槽)
+ * 数值槽位+1空格+单位合计恒7字符(4+1+2 / 5+1+1 / 4+1+2), 保证各量程显示宽度对齐
  *
- * @param buf: 输出缓冲区（至少5字节）
+ * @param buf: 输出缓冲区（至少6字节）
  * @param res_mohm: 电阻值(mΩ)
  * @param power_ok: 电源状态
  */
@@ -524,19 +526,33 @@ static void Format_Resistance_Value(char *buf, uint32_t res_mohm, uint8_t power_
         uint16_t whole = (uint16_t)(res_mohm / 1000);
         uint16_t frac = (uint16_t)((res_mohm % 1000) / 10);
         sprintf(tmp, "%u.%02u", whole, frac);
-    } else {
+    } else if (res_mohm < 100000) {
         uint16_t whole = (uint16_t)(res_mohm / 1000);
         uint16_t frac = (uint16_t)((res_mohm % 1000) / 100);
-        if (whole >= RES_DISPLAY_MAX_OHM) {
-            strcpy(tmp, "----");
-        } else {
-            sprintf(tmp, "%u.%u", whole, frac);
-        }
+        sprintf(tmp, "%u.%u", whole, frac);
+    } else if (res_mohm < 1000000) {
+        /* 100~999Ω: 整数显示（保留欧姆单位） */
+        sprintf(tmp, "%lu", res_mohm / 1000);
+    } else if (res_mohm < RES_DISPLAY_MAX_MOHM) {
+        /* 千欧: val = 阻值/0.01kΩ (100..999) → "1.00"~"9.99" */
+        uint16_t val = (uint16_t)(res_mohm / 10000);
+        sprintf(tmp, "%u.%02u", val / 100, val % 100);
+    } else {
+        strcpy(tmp, "----");
     }
-    /* 毫欧右对齐到3字符槽(与2字符单位合计5), 欧姆/OL为4字符(与1字符单位合计5);
-       总字符数恒定 → 每次重绘覆盖全部5个字符位置, 无残留 */
+    /* 各档右对齐槽位: 毫欧/千欧=4字符, 欧姆/OL=5字符; 加单位后合计恒7字符,
+       每次重绘覆盖全部7个字符位置, 无残留 */
     uint8_t len = (uint8_t)strlen(tmp);
-    uint8_t slot = (power_ok && res_mohm < 1000) ? 3 : 4;
+    uint8_t slot;
+    if (!power_ok) {
+        slot = 5;
+    } else if (res_mohm < 1000) {
+        slot = 4;
+    } else if (res_mohm < 1000000) {
+        slot = 5;
+    } else {
+        slot = 4;  /* 千欧 "1.00"~"9.99" */
+    }
     uint8_t pad = slot - len;
     uint8_t i;
     for (i = 0; i < pad; i++) buf[i] = ' ';
@@ -546,10 +562,11 @@ static void Format_Resistance_Value(char *buf, uint32_t res_mohm, uint8_t power_
 
 /*
  * 电阻单位格式化（恒白色显示, 前缀固定1空格与数值分隔）
- *   <1000 mΩ → " mΩ"   (毫欧, 3字符)
- *   >=1000 mΩ→ " Ω"    (欧姆, 2字符)
- *   OL        → "  "   (空白, 2字符)
- * 数值槽位+1空格+单位合计恒6字符(3+1+2 或 4+1+1), 保证两种情况显示宽度对齐
+ *   <1000 mΩ  → " mΩ"   (毫欧, 3字符)
+ *   1Ω~999Ω   → " Ω"    (欧姆, 2字符)
+ *   1k~9.99k  → " kΩ"   (千欧, 3字符)
+ *   OL        → "  "    (空白, 2字符)
+ * 数值槽位+1空格+单位合计恒7字符(4+1+2 / 5+1+1 / 4+1+2), 保证各量程宽度对齐
  *
  * @param buf: 输出缓冲区（至少4字节）
  * @param res_mohm: 电阻值(mΩ)
@@ -558,13 +575,15 @@ static void Format_Resistance_Value(char *buf, uint32_t res_mohm, uint8_t power_
 static void Format_Resistance_Unit(char *buf, uint32_t res_mohm, uint8_t power_ok)
 {
     if (!power_ok) {
-        buf[0] = ' '; buf[1] = ' '; buf[2] = '\0';  /* 空格间隙+空槽, 合计6字符防残留 */
+        buf[0] = ' '; buf[1] = ' '; buf[2] = '\0';  /* 空格间隙+空槽, 合计7字符防残留 */
         return;
     }
     if (res_mohm < 1000) {
         buf[0] = ' '; buf[1] = 'm'; buf[2] = (char)CHAR_OMEGA; buf[3] = '\0';
-    } else {
+    } else if (res_mohm < 1000000) {
         buf[0] = ' '; buf[1] = (char)CHAR_OMEGA; buf[2] = '\0';
+    } else {
+        buf[0] = ' '; buf[1] = 'k'; buf[2] = (char)CHAR_OMEGA; buf[3] = '\0';
     }
 }
 
@@ -665,7 +684,7 @@ void TFT_ShowContinuity(test_result_t *result)
     Format_Resistance_Unit(runit, result->resistance_mohm, result->power_ok);
     uint16_t r_color = Get_Resistance_Color(result->resistance_mohm, result->power_ok);
     TFT_DrawString_Font(15, 13, "R:", COLOR_WHITE, COLOR_BLACK, FONT_12x24);
-    /* 数值+1空格+单位合计恒6字符(13px/字符): 毫欧"123 mΩ"与欧姆"1.23 Ω"总宽对齐, 起点同为x=54 */
+    /* 数值+1空格+单位合计恒7字符(13px/字符): 毫欧"123 mΩ"与千欧"9.99 kΩ"总宽对齐, 起点同为x=54 */
     TFT_DrawString_Font(54, 13, rval, r_color, COLOR_BLACK, FONT_12x24);
     TFT_DrawString_Font((uint16_t)(54 + strlen(rval) * 13), 13, runit,
                         COLOR_WHITE, COLOR_BLACK, FONT_12x24);
@@ -703,14 +722,14 @@ void TFT_ShowContinuity(test_result_t *result)
         const char *speed_str;
         uint16_t speed_color = COLOR_CYAN;
         switch (result->emark.usb_speed) {
-            case USB_SPEED_USB20_ONLY: speed_str = "USB2.0   "; speed_color = COLOR_GRAY;  break;
+            case USB_SPEED_USB20_ONLY: speed_str = "USB2.0   "; speed_color = COLOR_YELLOW; break;
             case USB_SPEED_USB32_GEN1: speed_str = "USB3.2 G1"; speed_color = COLOR_CYAN;  break;
             case USB_SPEED_USB32_GEN2: speed_str = "USB3.2 G2"; speed_color = COLOR_CYAN;  break;
             case USB_SPEED_USB4_GEN3:  speed_str = "USB4 G3  "; speed_color = COLOR_GREEN; break;
             case USB_SPEED_USB4_GEN4:  speed_str = "USB4 G4  "; speed_color = COLOR_GREEN; break;
             default:   speed_str = "         "; speed_color = COLOR_BLACK; break;
         }
-        /* 与E-Mark模式同一速度色阶: 2.0=灰 / G1G2=青 / G3G4=绿 */
+        /* 与E-Mark模式同一速度色阶: 2.0=黄 / G1G2=青 / G3G4=绿 */
         TFT_DrawString_Font(84, 68, speed_str, speed_color, COLOR_BLACK, FONT_5x8);
     } else {
         TFT_DrawString_Font(84, 68, "         ", COLOR_BLACK, COLOR_BLACK, FONT_5x8);
@@ -783,7 +802,7 @@ void TFT_ShowEmark(test_result_t *result)
         const char *speed_str;
         uint16_t speed_color = COLOR_CYAN;
         switch (result->emark.usb_speed) {
-            case USB_SPEED_USB20_ONLY: speed_str = "USB2.0";      speed_color = COLOR_GRAY;  break;
+            case USB_SPEED_USB20_ONLY: speed_str = "USB2.0";      speed_color = COLOR_YELLOW; break;
             case USB_SPEED_USB32_GEN1: speed_str = "USB3.2 Gen1"; speed_color = COLOR_CYAN;  break;
             case USB_SPEED_USB32_GEN2: speed_str = "USB3.2 Gen2"; speed_color = COLOR_CYAN;  break;
             case USB_SPEED_USB4_GEN3:  speed_str = "USB4 Gen3";   speed_color = COLOR_GREEN; break;
