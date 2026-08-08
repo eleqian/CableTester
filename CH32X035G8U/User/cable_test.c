@@ -164,9 +164,13 @@ void Switch_Display_Mode(void)
 /*
  * 通断测试（Continuity test）
  *
- * CC信号：合并检测（无CC_R，PA1/PA2直接推挽输出低）。
+ * CC信号：合并检测（无CC_R，PA1/PA2直接驱动）。
  *   PA1↔PA2间5.1kΩ耦合导致无法独立分辨CC1/CC2，
  *   Type-C正反插本就只通一根CC，合并检测即可。
+ *   双向驱动互读：右口拉低→读左口 + 左口拉低→读右口，
+ *   兼容E-Mark电缆（芯片Rd会持续拉低其所在CC线，旧"释放恢复高"
+ *   判定会被两根CC线同时拉低而误报不通），且能拒绝单端E-Mark假连通
+ *   （无线缆时右口两根CC脚均为高阻，读不到左口拉低）。
  *
  * 其他信号：环回法，引脚配置为上拉输入。
  *   若线缆连通，上拉输入被右侧接口短接GND拉低；
@@ -177,32 +181,54 @@ void Test_Cable_Continuity(test_result_t *result)
     GPIO_InitTypeDef GPIO_InitStructure = {0};
     result->power_ok = 0;
 
-    /* CC信号双向检测：PC14/PC15带上拉，防单端E-Mark假连通 */
+    /* PC14/PC15配置为上拉输入（左口读方向） */
     GPIO_InitStructure.GPIO_Pin = USB3_CC1_PIN | USB3_CC2_PIN;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
     GPIO_Init(GPIOC, &GPIO_InitStructure);
     Delay_Ms(1);
 
-    /* ① 右口拉低 → 读左口 */
+    /* ① 右口拉低 → 读左口（有线缆则左口被拉低） */
     CC_E_Set_Output_Low();
     Delay_Ms(1);
     uint8_t cc1_r_low = GPIO_ReadInputDataBit(GPIOC, USB3_CC1_PIN);
     uint8_t cc2_r_low = GPIO_ReadInputDataBit(GPIOC, USB3_CC2_PIN);
 
-    /* ② 右口释放 → 读左口（上拉恢复高，E-Mark持续拉低则不变） */
+    /* ② 右口释放；左口PC3/PC0推挽输出低 → 读右口（反向验证，防单端E-Mark假连通）
+     * 注意：PC3/PC0与PC14/PC15同属左口CC1/CC2网络，但PC14/PC15受USBPD PHY
+     * 控制（残留CC_PU_330恒流源/CC_SEL通道输出级会顶住GPIO推挽拉低），
+     * 故必须用PC3/PC0（普通GPIO）拉低网络 */
     CC_E_Set_Floating();
+    GPIO_InitStructure.GPIO_Pin = USB3_CC1_AUX_PIN | USB3_CC2_AUX_PIN;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(GPIOC, &GPIO_InitStructure);
+    GPIO_ResetBits(GPIOC, USB3_CC1_AUX_PIN | USB3_CC2_AUX_PIN);
     Delay_Ms(1);
-    uint8_t cc1_r_float = GPIO_ReadInputDataBit(GPIOC, USB3_CC1_PIN);
-    uint8_t cc2_r_float = GPIO_ReadInputDataBit(GPIOC, USB3_CC2_PIN);
 
-    /* ③ 双端连通判定：右拉低时左低 + 右释放后左恢复高 = 真正双端连通 */
-    result->cc1_ok = (cc1_r_low == Bit_RESET && cc1_r_float != Bit_RESET) ? 1 : 0;
-    result->cc2_ok = (cc2_r_low == Bit_RESET && cc2_r_float != Bit_RESET) ? 1 : 0;
+    GPIO_InitStructure.GPIO_Pin = USB4_CC_E1_PIN | USB4_CC_E2_PIN;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    Delay_Ms(1);
+    uint8_t cc1_l_low = GPIO_ReadInputDataBit(GPIOA, USB4_CC_E1_PIN); /* 右口CC1(PA2) */
+    uint8_t cc2_l_low = GPIO_ReadInputDataBit(GPIOA, USB4_CC_E2_PIN); /* 右口CC2(PA1) */
 
-    /* 恢复PC14/PC15为浮空（USBPD模块需要） */
+    /* ③ 双端连通判定：右拉低→左低 且 左拉低→右低 = 真正双端连通
+     *    注意：单端E-Mark（左口仅有芯片Rd、无线缆）在②中右口读不到
+     *    左口拉低（高阻），自动判为不通，替代旧"释放恢复高"防假逻辑 */
+    result->cc1_ok = (cc1_r_low == Bit_RESET && cc1_l_low == Bit_RESET) ? 1 : 0;
+    result->cc2_ok = (cc2_r_low == Bit_RESET && cc2_l_low == Bit_RESET) ? 1 : 0;
+
+    /* 恢复PC14/PC15、PC3/PC0、PA1/PA2为浮空（USBPD模块/其他测试需要） */
+    GPIO_InitStructure.GPIO_Pin = USB3_CC1_PIN | USB3_CC2_PIN;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
     GPIO_Init(GPIOC, &GPIO_InitStructure);
+    GPIO_InitStructure.GPIO_Pin = USB3_CC1_AUX_PIN | USB3_CC2_AUX_PIN;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+    GPIO_Init(GPIOC, &GPIO_InitStructure);
+    GPIO_InitStructure.GPIO_Pin = USB4_CC_E1_PIN | USB4_CC_E2_PIN;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
 
     /* D+/D- 合并检测（右侧D+短接D-→GND） */
     result->dp_dm_ok = (GPIO_ReadInputDataBit(GPIOB, USB3_DP_PIN) == Bit_RESET) ? 1 : 0;
@@ -472,7 +498,7 @@ void Test_State_Machine(void)
             break;
 
         case MODE_EMARK:
-            CC_E_Set_Floating();  /* E-Marker PD通信期间PA1/PA2必须浮空 */
+            CC_E_Set_Floating();  /* 检测前先释放右口CC总线；通信所需Rd由EMarker_Full_Detect内部使能 */
             Detect_Emark_Info(&test_result);
             test_state = TEST_STATE_COMPLETE;
             break;
@@ -622,12 +648,12 @@ static void Draw_Signal_Indicator(uint16_t x, uint16_t y, const char *label, uin
 /*
  * 通断模式显示 (160x80 横屏)
  * ┌─────────────────────────────────────┐ y=0
- * │ ●FULL FEAT          Huawei 5A      │ ← 状态栏 (5x8)
+ * │ ●USB 3.2             Huawei 5A      │ ← 状态栏 (5x8)
  * ├─────────────────────────────────────┤ y=9
- * │      R: 15.6mΩ                    │ ← 电阻值 (12x24 居中, 数值4档色/单位白色)
+ * │      R: 15.6mΩ                      │ ← 电阻值 (12x24 居中, 数值4档色/单位白色)
  * ├─────────────────────────────────────┤ y=40
- * │ ■D+-  ■CC   ■SBU  ■SHLD            │ ← 信号线 (5x8)
- * │ ■TX1  ■RX1  ■TX2  ■RX2            │
+ * │ ■D+-  ■CC   ■SBU  ■SHLD             │ ← 信号线 (5x8)
+ * │ ■TX1  ■RX1  ■TX2  ■RX2              │
  * ├─────────────────────────────────────┤ y=64
  * │ E-Marker: 5A       USB3.2G2         │ ← 底部信息 (5x8)
  * └─────────────────────────────────────┘ y=79
@@ -910,7 +936,7 @@ void TFT_ShowWelcome(void)
     /* 分隔线 */
     TFT_FillRect(3, 40, 154, 1, COLOR_DARK_GRAY);
     /* 版本+作者 */
-    TFT_DrawString_Font(32, 50, "V2.0", COLOR_CYAN, COLOR_BLACK, FONT_5x8);
+    TFT_DrawString_Font(32, 50, "V2.2", COLOR_CYAN, COLOR_BLACK, FONT_5x8);
     TFT_DrawString_Font(56, 50, "  by eleqian", COLOR_WHITE, COLOR_BLACK, FONT_5x8);
     /* 模拟进度条: 深灰底 + 青色填充动画 (20步×50ms = 1s) */
     TFT_FillRect(10, 68, 140, 6, COLOR_DARK_GRAY);

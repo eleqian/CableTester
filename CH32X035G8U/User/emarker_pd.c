@@ -302,14 +302,14 @@ void EMarker_PD_Init(uint8_t vconn_cc, uint8_t pd_comm_cc)
     // PD通信的CC线：作为SRC等待E-Mark响应
     if (pd_comm_cc == 1) {
         // PD通信使用CC1
-        // USBPD->PORT_CC1 = CC_CMP_66 | CC_PU_330;  // Rp上拉
-        USBPD->PORT_CC1 = CC_CMP_66 | CC_LVE;
+        USBPD->PORT_CC1 = CC_CMP_66 | CC_PU_330;  // Rp上拉
+        // USBPD->PORT_CC1 = CC_CMP_66 | CC_LVE;
         USBPD->PORT_CC2 = CC_CMP_66;              // CC2不配置（VCONN供电）
     } else {
         // PD通信使用CC2
         USBPD->PORT_CC1 = CC_CMP_66;              // CC1不配置（VCONN供电）
-        // USBPD->PORT_CC2 = CC_CMP_66 | CC_PU_330;  // Rp上拉
-        USBPD->PORT_CC2 = CC_CMP_66 | CC_LVE;
+        USBPD->PORT_CC2 = CC_CMP_66 | CC_PU_330;  // Rp上拉
+        // USBPD->PORT_CC2 = CC_CMP_66 | CC_LVE;
     }
 
     // USBPD硬件通信通道(CC_SEL)设为PD通信通道(pd_comm_cc)。
@@ -719,6 +719,99 @@ void EMarker_Set_CC_Channel(uint8_t cc_channel)
 }
 
 /**
+ * @brief  使能右侧Type-C口CC通信线的Rd下拉电阻
+ * @param  gnd_pin: 接地引脚 (1=PA1/CC_E2, 2=PA2/CC_E1)
+ * @note   在左侧口使能VCONN供电后调用。E-Marker的CC通信线经线缆延伸至右口
+ *         CC脚（CC1↔PA2, CC2↔PA1），通信线落在哪个脚由线缆物理插入方向
+ *         决定（线缆翻面后交换），与pd_comm_cc无关。若通信线上没有E-Mark
+ *         芯片自身的Rd，通信线悬空会使USBPD上拉无泄放回路，BMC直流偏置
+ *         错乱、PD通信超时（表现为"检测到E-Marker但读取失败"）。
+ *         电路上只有PA1↔PA2间1颗5.1kΩ电阻，采用"接地脚推挽输出低"复用：
+ *         - gnd_pin=1 → PA1接地，PA2（若为通信线）经5.1kΩ对GND形成Rd
+ *         - gnd_pin=2 → PA2接地，PA1（若为通信线）经5.1kΩ对GND形成Rd
+ *         与USBPD上拉分压后静态约1.68V（330μA×5.1k），满足PD BMC接收
+ *         电平（设计文档3.4.2节）。另一脚保持浮空，不干扰BMC信号。
+ * @note   方向由EMarker_Full_Detect自动尝试两种并保留成功的一方，无需手动指定。
+ */
+void EMarker_Enable_Rd_Pulldown(uint8_t gnd_pin)
+{
+    GPIO_InitTypeDef GPIO_InitStructure = {0};
+
+    /* 先恢复PA1/PA2为浮空输入，避免引脚模式切换产生毛刺 */
+    GPIO_InitStructure.GPIO_Pin = USB4_CC_E1_PIN | USB4_CC_E2_PIN;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+    /* 接地脚推挽输出低 → 另一脚（若为通信线）经唯一5.1kΩ电阻对GND形成Rd */
+    if (gnd_pin == 1) {
+        GPIO_InitStructure.GPIO_Pin = USB4_CC_E2_PIN;  /* PA1接地 */
+    } else {
+        GPIO_InitStructure.GPIO_Pin = USB4_CC_E1_PIN;  /* PA2接地 */
+    }
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    GPIO_ResetBits(GPIOA, GPIO_InitStructure.GPIO_Pin);
+}
+
+/**
+ * @brief  关闭右侧Type-C口Rd下拉电阻
+ * @note   恢复PA1/PA2为浮空输入，避免5.1kΩ影响后续CC通断等其他测试
+ */
+void EMarker_Disable_Rd_Pulldown(void)
+{
+    GPIO_InitTypeDef GPIO_InitStructure = {0};
+
+    GPIO_InitStructure.GPIO_Pin = USB4_CC_E1_PIN | USB4_CC_E2_PIN;
+    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+    GPIO_Init(GPIOA, &GPIO_InitStructure);
+}
+
+/**
+ * @brief  使用指定方向的右口Rd下拉，完成一次完整E-Mark PD通信
+ * @param  gnd_pin: 接地引脚 (1=PA1, 2=PA2)，另一脚作为通信线Rd的接地点
+ * @param  info: E-Mark信息结构指针
+ * @return EMARK_OK-成功, EMARK_PD_FAIL-失败
+ * @note   返回前PA1/PA2均恢复浮空；失败时调用者可交换方向重试。
+ *         GoodCRC在解析后、关闭Rd前发送，保证应答时序正确。
+ */
+static uint8_t EMarker_Try_Comm(uint8_t gnd_pin, emarker_info_t *info)
+{
+    uint8_t ret;
+
+    EMarker_Enable_Rd_Pulldown(gnd_pin);
+
+    /* 发送Discover Identity命令 */
+    ret = EMarker_Send_Discover_Identity();
+    if (ret != 0) {
+        EMarker_Disable_Rd_Pulldown();
+        return EMARK_PD_FAIL;  /* 发送失败：线路偏置错误（方向不对） */
+    }
+
+    /* 重新进入接收模式，等待E-Mark的VDM响应 */
+    PD_Enter_Rx_Mode();
+    ret = PD_Wait_Response(PD_COMM_TIMEOUT_MS);
+    if (ret != 0) {
+        EMarker_Disable_Rd_Pulldown();
+        return EMARK_PD_FAIL;  /* 超时 */
+    }
+
+    /* 提取Message ID并立即发送GoodCRC */
+    uint16_t rx_msg_header = pd_rx_buf[0] | (pd_rx_buf[1] << 8);
+    uint8_t rx_msg_id = (rx_msg_header >> 9) & 0x07;
+
+    /* 解析响应 */
+    ret = EMarker_Parse_Response(info);
+
+    /* 立即发送GoodCRC（必须在tReceive时间内，最大750μs） */
+    PD_Send_GoodCRC(rx_msg_id);
+
+    EMarker_Disable_Rd_Pulldown();
+
+    return (ret == 0) ? EMARK_OK : EMARK_PD_FAIL;
+}
+
+/**
  * @brief  完整的E-Mark检测流程（高层API）
  */
 uint8_t EMarker_Full_Detect(emarker_info_t *info)
@@ -742,39 +835,17 @@ uint8_t EMarker_Full_Detect(emarker_info_t *info)
     EMarker_Enable_VCONN(vconn_cc);
     Delay_Ms(20);  // 等待VCONN稳定和E-Mark上电
 
-    // 步骤4: 发送Discover Identity命令
-    ret = EMarker_Send_Discover_Identity();
-    if (ret != 0) {
-        EMarker_Disable_VCONN();
-        return EMARK_PD_FAIL;  // 发送失败
+    // 步骤4: 自动检测右口Rd方向并完成PD通信
+    // 通信线落在右口PA1还是PA2由线缆物理插入方向决定（与pd_comm_cc无关），
+    // 依次尝试两种方向，以是否收到E-Mark响应作为判据，自动保留正确方向。
+    ret = EMarker_Try_Comm(1, info);  // 尝试PA1接地
+    if (ret != EMARK_OK) {
+        ret = EMarker_Try_Comm(2, info);  // 失败则交换：PA2接地
     }
 
-    // 步骤5: 重新进入接收模式，等待E-Mark的VDM响应
-    PD_Enter_Rx_Mode();
-
-    // 步骤6: 等待并接收响应
-    ret = PD_Wait_Response(PD_COMM_TIMEOUT_MS);
-    if (ret != 0) {
-        EMarker_Disable_VCONN();
-        return EMARK_PD_FAIL;  // 超时
-    }
-
-    // 步骤7: 提取Message ID并立即发送GoodCRC
-    uint16_t rx_msg_header = pd_rx_buf[0] | (pd_rx_buf[1] << 8);
-    uint8_t rx_msg_id = (rx_msg_header >> 9) & 0x07;
-
-    // 步骤8: 解析响应
-    ret = EMarker_Parse_Response(info);
-
-    // 立即发送GoodCRC（必须在tReceive时间内，最大750μs）
-    PD_Send_GoodCRC(rx_msg_id);
-
-    // 步骤9: 关闭VCONN
+    // 步骤5: 关闭VCONN（先撤右口Rd下拉，再关VCONN）
+    EMarker_Disable_Rd_Pulldown();
     EMarker_Disable_VCONN();
 
-    if (ret != 0) {
-        return EMARK_PD_FAIL;  // PD通信失败
-    }
-
-    return EMARK_OK;  // 成功
+    return ret;
 }

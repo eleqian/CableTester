@@ -179,6 +179,28 @@ void EMarker_Disable_VCONN(void);
 void EMarker_Set_CC_Channel(uint8_t cc_channel);
 
 /**
+ * @brief  使能右侧Type-C口CC通信线的Rd下拉电阻
+ * @param  gnd_pin: 接地引脚 (1=PA1/CC_E2, 2=PA2/CC_E1)
+ * @return none
+ * @note   在左侧口使能VCONN供电之后调用。E-Marker通信线经线缆延伸至右口，
+ *         通信线落在PA1还是PA2由线缆物理插入方向决定（与pd_comm_cc无关）。
+ *         右口PA1(CC_E2)↔PA2(CC_E1)间仅有1颗5.1kΩ电阻，复用方式：
+ *         - gnd_pin=1 → PA1推挽输出低，PA2经5.1kΩ对GND形成Rd（通信线在PA2）
+ *         - gnd_pin=2 → PA2推挽输出低，PA1经5.1kΩ对GND形成Rd（通信线在PA1）
+ *         与USBPD上拉分压后通信线静态约1.68V，满足PD BMC电平要求。
+ * @note   方向由EMarker_Full_Detect自动尝试两种并保留成功的一方（试错交换），
+ *         无需按pd_comm_cc手动选择。
+ */
+void EMarker_Enable_Rd_Pulldown(uint8_t gnd_pin);
+
+/**
+ * @brief  关闭右侧Type-C口Rd下拉电阻
+ * @return none
+ * @note   恢复PA1/PA2为浮空输入，避免5.1kΩ影响后续CC通断等其他测试
+ */
+void EMarker_Disable_Rd_Pulldown(void);
+
+/**
  * @brief  检测并读取E-Mark芯片信息（底层API）
  * @param  vconn_cc: VCONN所在的CC通道 (1=CC1, 2=CC2)
  * @param  pd_comm_cc: PD通信使用的CC通道 (1=CC1, 2=CC2)

@@ -36,9 +36,9 @@ extern "C" {
 /*
  * CC_E1 / CC_E2（右口CC引脚）：
  * PA2(CC_E1) 与 PA1(CC_E2) 之间经 5.1kΩ 电阻耦合。
- * E-Marker PD通信期间必须保持浮空，避免5.1k影响USBPD引脚电平。
+ * E-Marker PD通信期间：通信侧脚保持浮空，另一脚推挽输出低，
+ * 经5.1kΩ对GND形成Rd（通信线直流偏置，见emarker_pd.c EMarker_Enable_Rd_Pulldown）。
  * 通断测试时推挽输出低（合并检测）；华为快充检测时PA2=高、PA1=ADC。
- * 已取消独立的CC_R引脚，改为PA1/PA2直接驱动。
  */
 #define USB4_CC_E1_PIN    GPIO_Pin_2    /* PA2 - 右口CC1          */
 #define USB4_CC_E2_PIN    GPIO_Pin_1    /* PA1 - 右口CC2          */
