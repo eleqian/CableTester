@@ -1,6 +1,6 @@
 # CableTester 详细设计文档
 
-**版本**: V2.3
+**版本**: V2.4
 **更新日期**: 2026-11-14
 **作者**: CableTester Team
 
@@ -23,6 +23,7 @@
 | V2.1 | 2026-08-02 | OpenCode | **显示界面优化：E-Mark界面重排（2列对齐布局、类型入标题栏、线缆长度/HW-FW版本/Product ID解析、VDO合并一行）、显示配色统一、电阻数值与单位宽度对齐、test_result_t嵌套emarker_info_t** |
 | V2.2 | 2026-08-08 | OpenCode | **E-Mark通信可靠性修复：右口Rd下拉自动检测与交换（复用PA1↔PA2间5.1kΩ，方向与线缆物理插入方向相关，试错交换自动保留正确方向）** |
 | V2.3 | 2026-11-14 | WorkBuddy | **支持VBUS供电的 E-Mark，优化信息显示和按键响应** |
+| V2.4 | 2026-11-14 | WorkBuddy | **E-Mark 读取重做：主动/被动线缆 VDO 按 PD R3.2 分别解析、电流档修正为 01b=3A/10b=5A、读取改为非阻塞分步状态机（失败重试期间按键可响应）、界面区分 Reading/失败；修复 Delay_Us 回绕缺陷并删除 PD_Busy_Us/PD_Wait_Ms；诊断代码收进 EMARK_DEBUG_DIAG / CABLE_DEBUG_TIMING 编译宏（默认关闭）** |
 
 ---
 
@@ -46,8 +47,15 @@ CableTester是一款基于CH32X035G8U微控制器的USB线缆测试仪，用于�
    - 分辨率：1mΩ/0.1Ω（近10kΩ端粗至约240mΩ/LSB）
    - 采用参考电阻分压环回法测量
 
-4. **额外功能**
-   - E-mark芯片检测（通过CC引脚1k下拉电阻）
+4. **E-Mark 信息读取**
+   - E-Mark 芯片检测（CC 引脚 1kΩ 下拉，Ra 检测）
+   - 通过 USB PD `Discover Identity` 读取线缆信息
+   - **按 PD R3.2 区分被动线缆（Table 6.42）与主动线缆（Table 6.43/6.44）解析**
+   - 解析内容：线缆类型、USB 速率、电流能力（3A/5A）、EPR、最高 VBUS、线缆长度、
+     VID/PID、HW/FW 版本；主动线另有 SBU 支持、温度、铜/光纤、Re-driver/Re-timer、lane 数
+   - 支持 VCONN 供电与 VBUS 供电两类 E-Marker
+
+5. **其他功能**
    - 快充识别电阻检测（华为线等）
    - 按键切换显示内容
 
@@ -197,7 +205,7 @@ CableTester是一款基于CH32X035G8U微控制器的USB线缆测试仪，用于�
 
 | 信号 | MCU引脚 | 网络名 | 说明 |
 |------|---------|--------|------|
-| V_PWR_EN | PB6 | V_PWR_EN | 测试电源使能（PMOS低电平使能），串联100欧参考电阻，再经过USB座和线缆接地，分压法测量电阻 |
+| V_PWR_EN | PB6 | V_PWR_EN | 测试电源使能（PMOS低电平使能），串联50Ω参考电阻，再经过USB座和线缆接地，分压法测量电阻 |
 | V_PWR_L | PB0 | V_PWR_L | 经过101倍放大的分压测量（ADC_Channel_8），用于测量较小的电阻（小于1欧姆） |
 | V_PWR_H | PB1 | V_PWR_H | 未经过放大的分压测量（ADC_Channel_9），用于测量较大的电阻（超过V_PWR_L量程时使用） |
 
@@ -210,7 +218,7 @@ CableTester是一款基于CH32X035G8U微控制器的USB线缆测试仪，用于�
 **放大通道（V_PWR_L, PB0, ADC_Channel_8）：**
 
 ```
-V_TEST (3.3V) -> R5 (100Ω) -> 线缆VBUS -> 线缆GND -> 短接回路 -> GND
+V_TEST (3.3V) -> R5 (50Ω) -> 线缆VBUS -> 线缆GND -> 短接回路 -> GND
                               |
                               +-> 运放同相输入端 (+)
                                       |
@@ -250,13 +258,13 @@ V_PWR_L（放大通道，增益101）有效线性范围上限约900mΩ，此时A
 放大通道（V_PWR_L，R < 900mΩ）：
 ```
 R_mohm = adc_value × SERIES_RESISTOR / (OPAMP_GAIN × ADC_RESOLUTION - adc_value)
-其中：SERIES_RESISTOR = 100000 mΩ, OPAMP_GAIN = 101, ADC_RESOLUTION = 4095
+其中：SERIES_RESISTOR = 50000 mΩ, OPAMP_GAIN = 101, ADC_RESOLUTION = 4095
 ```
 
 未放大通道（V_PWR_H，R ≥ 900mΩ）：
 ```
 R_mohm = adc_value × SERIES_RESISTOR / (ADC_RESOLUTION - adc_value)
-其中：SERIES_RESISTOR = 100000 mΩ, ADC_RESOLUTION = 4095
+其中：SERIES_RESISTOR = 50000 mΩ, ADC_RESOLUTION = 4095
 ```
 
 **推导过程（放大通道）**：
@@ -312,6 +320,9 @@ CC1_AUX (PC3) + CC2_AUX (PC0) -> 并联输出3.3V -> VCONN供电
 - CC_E1 (PA2) 和 CC_E2 (PA1) 在E-Marker检测阶段必须保持浮空输入；进入PD通信后，由固件自动在PA1/PA2间选择一脚接地（经5.1kΩ形成通信线Rd，见3.4.4）
 - VCONN使用2个GPIO（PC3/PC0）并联提供足够驱动能力（约40mA）
 - E-mark芯片通常需要<5mA，足够使用
+- **VBUS 供电型 E-Marker**：Type-C R2.0 §2.5 允许线缆用 VBUS 代替 VCONN 取电，
+  这类芯片的 VCONN 引脚可能根本不存在。固件在读取期间打开 `V_PWR_EN`
+  （3.3V 经 50Ω 到 VBUS，线端约 3.22V），读完立即撤掉，避免干扰后续电阻/通断测试
 
 #### 2.3.3.1 CC_E1/CC_E2控制与测试方案
 
@@ -470,7 +481,9 @@ uint16_t Read_Input_Voltage_mV(void);                   // 返回毫伏(mV)
 
 **关键参数**：
 - 运放增益：101倍（同相放大，1+10kΩ/100Ω）
-- 串联参考电阻：100Ω
+- 串联参考电阻：**50Ω**（V2.3 起由 100Ω 改为 50Ω：VBUS 供电型 E-Marker 读取时
+  3.3V 经 50Ω 到线端约 3.22V，可越过芯片 UVLO；100Ω 时仅约 2.97V 起不来。
+  固件里 `SERIES_RESISTOR` 必须与硬件值一致，否则电阻读数按比例偏差）
 - ADC分辨率：12位 (4095)
 - 参考电压：3.3V
 - V_PWR_L量程：0~900mΩ（分辨率~0.24mΩ）
@@ -496,6 +509,9 @@ void TFT_Write_Data(uint8_t data);
 - 时钟：12MHz (4分频)
 - CPOL：High, CPHA：2Edge
 
+**异常保护**：`SPI_Wait_TXE()` / `SPI_Wait_Idle()` 带 `SPI_WAIT_TIMEOUT = 50000u`
+次轮询上界（约 10ms），SPI 状态异常时只丢字节、不会卡死主循环。
+
 #### 3.2.4 TFT显示模块 (cable_tft.c/h)
 
 **功能**：
@@ -520,23 +536,39 @@ void TFT_ShowWelcome(void);
 
 通断模式（160×80 横屏）：
 ```
-y=0   ●FULL FEAT          HUAWEI 5A    ← 状态栏: 指示灯+等级(5x8)
+y=0   ●USB 3.2            HUAWEI 5A     ← 状态栏: 指示灯+等级(5x8)
 y=13  R: 123 mΩ                          ← 电阻值 (12x24): 数值5档色/单位白色
-y=43  ■D+-  ■CC   ■SBU  ■SHLD           ← 信号线 (5x8): 绿=通/红=断
-y=52  ■TX1  ■RX1  ■TX2  ■RX2
-y=65  E-Marker: 5A       USB3.2G2        ← 底部信息 (5x8)
+y=45  ■D+-  ■CC   ■SBU  ■SHLD           ← 信号线 (5x8): 绿=通/红=断
+y=54  ■TX1  ■RX1  ■TX2  ■RX2
+y=68  E-Mark: 5A         USB3.2 G2       ← 底部信息 (5x8)
 ```
 
-E-Mark模式（160×80 横屏）：
+E-Mark 模式（被动线缆）：
 ```
 y=0   E-Mark: YES             Passive     ← 标题 + 线缆类型
 y=13  USB 3.2 Gen2              5A        ← 速度+电流 (8x16)
 y=34  EPR:Yes   MaxV:20V                  ← 2列详细字段(左x=4/右x=82)
-y=43  SBU:Yes   Len:~1m
-y=52  VID:0xFFFF PID:0xFFFF
-y=61  HW:0x1    FW:0x1
-y=70  VDO:12345678 87654321               ← 原始VDO合并一行
+y=43  VCON:No   Len:~1m                   ← 是否需要 VCONN / 长度
+y=52  VID:0x8254 PID:0x0000
+y=61  HW:0x1    FW:0x0
+y=70  VDO:00084040                        ← 原始 VDO（主动线再附 VDO2）
 ```
+
+E-Mark 模式（主动线缆）：
+```
+y=0   E-Mark: YES             Active
+y=13  USB4 Gen3                --         ← 无直通 VBUS 时电流显示 "--"
+y=34  EPR:Yes   MaxV:50V
+y=43  SBU:Act   Len:~100m                 ← SBU 支持(Pas/Act/No) / 长度
+y=52  VID:0x2109 PID:0x8888
+y=61  T:90/110  Opt/RTmr                  ← 温度(最高/关断) / 介质与元件
+y=70  VDO:126A5E5A 5A6E264B
+```
+
+**读取状态提示**：
+- 检测到芯片但一轮候选还没跑完 → `Reading...`（黄），不会先闪失败
+- 一轮 18 个候选全部失败 → `PD Comm Failed`（红）；之后每 5s 后台重试且不再切回 Reading
+- 无芯片 → `No E-Mark Chip`（灰）
 
 **配色统一规则（V2.1）**：
 - 绿=优秀/通过/支持，黄=中等，橙=警告，红=错误/断路，紫=华为5A快充，青=USB3.x速率标识，灰=中性/原始数据，白=标签/中性数值
@@ -569,11 +601,14 @@ typedef struct {
 
 **主要函数**：
 ```c
+void Cable_Test_Init(void);
+void Test_State_Machine(void);                 // 非阻塞测试状态机（含 E-Mark 分步读取）
 void Test_Cable_Continuity(test_result_t *result);
-void Test_Cable_Resistance(test_result_t *result);
-void Detect_Emark_Info(test_result_t *result);
+uint32_t Get_Cable_Resistance_Single(void);
+void Detect_Emark_Info(test_result_t *result); // 阻塞式兼容接口（正式流程走 EMarker_Task_Step）
 void Detect_Fast_Charge_Info(test_result_t *result);
-void Run_Full_Test(test_result_t *result);
+void Switch_Display_Mode(void);
+void TFT_ShowTestResult(test_result_t *result, display_mode_t mode);
 ```
 
 #### 3.2.6 按键模块（非阻塞实现）
@@ -592,48 +627,75 @@ void Run_Full_Test(test_result_t *result);
 #### 3.2.7 E-Mark PD通信模块 (emarker_pd.c/h)
 
 **功能**：
-- 自动检测E-Mark芯片存在性
-- 通过USB PD协议发送Discover Identity命令
-- 接收并解析VDM响应，提取线缆详细信息（含USB Product ID、线缆长度近似值）
-- VCONN电源自动控制
-- 多CC通道自动选择（CC1/CC2）
-- 右口CC通信线Rd下拉自动检测与交换（V2.2，见3.4.4）
+- 自动检测 E-Mark 芯片存在性（Ra≈1kΩ）
+- 通过 USB PD `Discover Identity` 读取并解析 VDM 响应
+- VCONN / VBUS 双供电支持（部分 E-Marker 只从 VBUS 取电，读取期间需开 `V_PWR_EN`）
+- 多 CC 通道自动选择、右口 Rd 下拉方向自动交换（见 3.4.4）
+- **非阻塞分步读取**：`EMarker_Task_Step()` 每次只做一次 PD 事务，失败重试期间
+  主循环仍能扫按键、刷新显示（实测主循环最大间隔 50~87ms）
+- **按线缆类型分别解析 Cable VDO**（被动 / 主动，位定义不同）
 
-**数据结构**：
+**数据结构**（`emarker_info_t`）：
 ```c
 typedef struct {
     uint8_t  valid;              // 数据有效性标志
-    uint8_t  id_header_present;  // ID Header是否存在
-    uint32_t vdm_header;         // VDM Header
-    uint32_t id_header;          // ID Header
-    uint32_t cert_stat;          // Cert Stat VDO (可选)
-    uint32_t product_vdo;        // Product VDO
-    uint32_t cable_vdo1;         // Cable VDO 1
-    uint32_t cable_vdo2;         // Cable VDO 2 (可选, 仅被动线缆)
-    uint8_t  cable_type;         // 线缆类型: 0-被动, 1-主动, 2-未知
-    uint8_t  epr_capable;        // EPR支持: 0-不支持, 1-支持
-    uint8_t  usb_speed;          // USB速度等级
-    uint8_t  current_capability; // 电流能力（3A/5A）
-    uint8_t  vdo_version;        // VDO版本
-    uint16_t vendor_id;          // Vendor ID (ID Header Bit15-0)
-    uint16_t product_id;         // USB Product ID (Product VDO Bit31-16)
+    uint8_t  id_header_present;  // ID Header 是否存在
+    uint32_t vdm_header;
+    uint32_t id_header;
+    uint32_t cert_stat;
+    uint32_t product_vdo;
+    uint32_t cable_vdo1;         // Cable VDO1（被动/主动位定义不同）
+    uint32_t cable_vdo2;         // Cable VDO2（仅主动线缆返回）
+    /* ---- 两种线缆共用 ---- */
+    uint8_t  cable_type;         // 0=被动, 1=主动, 2=未知
+    uint8_t  epr_capable;
+    uint8_t  usb_speed;          // 0=USB2 / 1=Gen1 / 2=Gen2 / 3=USB4 G3 / 4=USB4 G4
+    uint8_t  current_capability; // 3A / 5A；主动线无直通 VBUS 时为 0xFF（不适用）
+    uint8_t  vdo_version;
+    uint16_t vendor_id;          // ID Header Bit15:0
+    uint16_t product_id;         // Product VDO Bit31:16
+    /* ---- 按线缆类型分别填充 ---- */
+    uint8_t  plug_type;          // Bit19:18: 2=Type-C, 3=Captive
+    uint8_t  termination;        // 被动:0=不需VCONN/1=需；主动:2/3=需VCONN
+    uint8_t  max_vbus_50v;       // 1=50V, 0=20V
+    uint8_t  sbu_supported;      // 仅主动（Bit8，反逻辑）
+    uint8_t  sbu_active;         // 仅主动（Bit7）
+    uint8_t  vbus_through;       // 仅主动（Bit4）
+    uint8_t  sop2_present;       // 仅主动（Bit3）
+    /* ---- 仅主动线缆 Active Cable VDO2 ---- */
+    uint8_t  max_temp, shutdown_temp;   // 最高工作温度 / 关断温度（℃）
+    uint8_t  optical, retimer;          // 1=光纤 / 1=Re-timer
+    uint8_t  usb4_supported, usb2_supported, usb3_supported;  // 反逻辑位，1=支持
+    uint8_t  lanes;                     // USB3 lane 数：1 或 2
 } emarker_info_t;
 ```
 
-**线缆长度解析（V2.1）**：线缆长度由 Cable VDO1 的 Latency 位（16:13）近似换算：
-- 0001b~0111b → ~1m~7m（<10ns~60-70ns）
-- 1000b~1010b → ~100m/~200m/~300m
-- 0000b 及 1011b~1111b 无效 → 显示 "?"
+**电流能力编码（R3.2 Table 6.42，易踩点）**：
 
-**PD通信步骤**：
-1. 检测E-Mark所在CC通道 → 确定VCONN供电和PD通信通道（逆关系，见3.4.1）
-2. 使能VCONN供电（PC3或PC0），等待20ms稳定
-3. 设置USBPD CC_SEL为PD通信通道（EMarker_Set_CC_Channel）
-4. 右口Rd下拉自动检测（V2.2）：依次尝试PA1/PA2两种接地方向，以是否收到E-Mark响应为判据自动保留正确方向（见3.4.4）
-5. USBPD发送Discover Identity VDM命令（SOP'寻址Cable Plug）
-6. 接收GoodCRC，发送GoodCRC确认
-7. 接收VDM响应，解析Cable VDO1等数据
-8. 完成，关闭VCONN
+| Bit6:5 | 含义 |
+|---|---|
+| 00b | Invalid，接收方按 01b（3A）处理 |
+| 01b | 3A |
+| 10b | **5A** |
+| 11b | Invalid，按 01b（3A）处理 |
+
+早期按 PD3.0 草案实现成「00b=3A / 01b=5A」是错的，会把 3A 线显示成 5A。
+主动线缆另有约束：`VBUS Through Cable = 0` 时该字段整段忽略，此时 `current_capability`
+置 0xFF，界面显示 `--`。
+
+**读取流程（分步状态机，`EMarker_Task_Step`）**：
+1. 检测 E-Mark 所在 CC 通道 → 确定 VCONN 供电通道与 PD 通信通道（逆关系，见 3.4.1）
+2. **VBUS 与 VCONN 同时上电，只等一次建立时间**：正常 5ms，失败后的加时重试 40ms。
+   VBUS 供电型 E-Marker 必须打开 `V_PWR_EN`（3.3V 经 50Ω 限流，实测线端约 3.22V）
+3. 设置 `CC_SEL` 指向 PD 通信通道，并按候选配置右口 Rd 方向（PA1/PA2/浮空）
+4. 发送 `Discover Identity`（SOP' 或 SOP''）
+5. 收到响应后**先回 GoodCRC 再解析**：GoodCRC 必须在 tReceiverResponse（≤750µs）内发出，
+   解析放前面会白白耗掉时间
+6. 解析 VDO；成功后立即撤 VBUS、关 VCONN、恢复 CC 为浮空输入
+7. 失败则推进下一个候选，共 18 个（6 快读 + 6 加时重试 + 3 VCONN-only + 3 VBUS-only）；
+   相邻两步之间至少让出 20ms 给主循环
+
+**候选组合**：`SOP' {Rd 浮空 / PA2 / PA1}` → `SOP'' {同}`，覆盖正反插与芯片自带终端的差异。
 
 ### 3.3 工作流程（V1.7 状态机版本）
 
@@ -652,8 +714,8 @@ typedef struct {
 │   ↓                            │
 │ 执行测试状态机                  │
 │   ↓                            │
-│ ├→ IDLE: 检查是否到达1秒周期   │
-│ ├→ START: 启动相应测试         │
+│ ├→ IDLE: 检查是否到达测试周期（通断页 200ms / E-Mark 页 50ms）│
+│ ├→ START: 启动相应测试（E-Mark 每拍只推进一步）  │
 │ ├→ RUNNING: 执行状态机步骤     │
 │ └→ COMPLETE: 更新显示          │
 │   ↓                            │
@@ -744,32 +806,36 @@ CC信号（双向驱动互读，V2.2）：
 
 #### 3.3.4 E-mark检测流程
 
-**前提条件**：检测阶段CC_E1(PA2)和CC_E2(PA1)必须保持浮空输入，避免5.1k影响USBPD引脚电平。
+**前提条件**：检测阶段 CC_E1(PA2)、CC_E2(PA1) 必须保持浮空输入，避免 5.1kΩ 影响 USBPD 引脚电平。
+
+**触发时机**：
+- **通断模式**：200ms 一拍；检测到芯片即发起读取（分步，每拍最多一次事务）
+- **E-Mark 模式**：50ms 一拍推进读取；在线检测单独节流为 200ms 一次，
+  连续 2 次（≈400ms）检测不到 Ra 判定拔线并清结果；插入边沿立即重读（回拨限流时间戳）
 
 ```
-① 确保PA1=PA2=浮空输入
+① PA1 = PA2 = 浮空输入
 
-② 通过USBPD硬件模块检测CC线上的Rd（1k下拉）
-   检测到E-mark后确定CC通道（CC1或CC2）
+② USBPD 硬件比较器检测 CC 线上的 Rd（1kΩ 下拉）
+   检测到 E-Mark 后确定 CC 通道（CC1/CC2）
 
-③ 使能VCONN供电（逆关系）：
-   - E-mark在CC1 → VCONN经PC3供电，PD通信走CC2(PC15)
-   - E-mark在CC2 → VCONN经PC0供电，PD通信走CC1(PC14)
-   - 同时设置USBPD CONFIG的CC_SEL为PD通信通道（EMarker_Set_CC_Channel；
-     复位默认CC1，漏设此位时翻面后PD通信应走CC2而命令仍发往CC1，
-     表现为"检测到E-Marker但读取失败"，必现）
-   等待20ms让E-mark芯片上电稳定
+③ 建立供电（VCONN 与 PD 通信通道为逆关系）：
+   - E-Mark 在 CC1 → VCONN 走 PC3，PD 通信走 CC2(PC15)
+   - E-Mark 在 CC2 → VCONN 走 PC0，PD 通信走 CC1(PC14)
+   - 同时把 CONFIG.CC_SEL 设为 PD 通信通道；复位默认 CC1，漏设时翻面后
+     PD 命令仍发往 CC1，表现为"检测到 E-Marker 但读取失败"（必现）
+   - VBUS（V_PWR_EN）与 VCONN 同时上电，只等一次建立时间：正常 5ms，
+     失败后的加时重试 40ms
 
-④ 右口Rd下拉自动检测与交换（V2.2，见3.4.4）：
-   - 依次尝试PA1接地/PA2接地两种方向
-   - 以是否收到E-Mark响应（GoodCRC/VDM响应）为判据自动保留正确方向
+④ 右口 Rd 方向逐候选尝试：Rd 浮空（芯片自带终端）/ PA2 接地 / PA1 接地
 
-⑤ USBPD硬件模块发送Discover Identity VDM命令
+⑤ 发送 Discover Identity：先 SOP'，再 SOP''（部分芯片只应 SOP''）
 
-⑥ 接收GoodCRC和VDM响应
-   解析Cable VDO1等数据（线缆类型、速率、电流能力等）
+⑥ 收到响应后先回 GoodCRC（≤750µs），再解析 VDO；成功即停
 
-⑦ 测试完成，撤右口Rd下拉，关闭VCONN，恢复CC引脚为浮空输入
+⑦ 撤 VBUS、关 VCONN、CC 恢复浮空输入
+
+⑧ 全失败则该轮结束（共 18 个候选），按间隔自动重试
 ```
 
 ### 3.4 USBPD硬件控制
@@ -783,7 +849,12 @@ VCONN在CC1 → PD通信使用CC2（PC15）
 VCONN在CC2 → PD通信使用CC1（PC14）
 ```
 
-VCONN经辅助GPIO（PC3或PC0）供电，PD通信走USBPD硬件引脚（PC14或PC15），形成逆关系。**必须将USBPD CONFIG的CC_SEL设置为PD通信通道**（`EMarker_Set_CC_Channel(pd_comm_cc)`）：复位值0=CC1，若不设置，线缆翻面后E-Mark在CC1、PD通信应走CC2时命令仍发往CC1直通线，表现为"检测到E-Marker但读取失败"（必现）。VCONN使能后需等待约20ms（固件实际值），待E-Mark芯片上电稳定后再配置PD通信。
+VCONN经辅助GPIO（PC3或PC0）供电，PD通信走USBPD硬件引脚（PC14或PC15），形成逆关系。**必须将USBPD CONFIG的CC_SEL设置为PD通信通道**（`EMarker_Set_CC_Channel(pd_comm_cc)`）：复位值0=CC1，若不设置，线缆翻面后E-Mark在CC1、PD通信应走CC2时命令仍发往CC1直通线，表现为"检测到E-Marker但读取失败"（必现）。
+
+**上电时序（V2.4）**：VBUS（`V_PWR_EN`）与 VCONN **同时上电**，只等一次建立时间——
+正常路径 5ms（实测 40/20/10/5ms 逐级压缩均能首试读通），失败后的加时重试 40ms，
+兼容回退档用 VCONN-only 60ms / VBUS-only 30~100ms。早期「先 VBUS 等 settle、
+再 VCONN 等 60ms」的两段串行写法已废弃，单次事务可省 60ms。
 
 #### 3.4.2 CC_LVE寄存器控制
 
@@ -873,6 +944,14 @@ EMarker_Try_Comm(2)  → 交换：PA2接地，再次完整PD通信
    - 消抖时间：20ms
    - 长按检测：1秒
 
+4. **E-Mark PD 时序（V2.4）**
+   - BMC 300kbps，UI = 1.6875µs（`BMC_CLK_CNT = 80` @48MHz）
+   - GoodCRC 必须在 tReceiverResponse（≤750µs）内发出 → 收到响应**先回 GoodCRC 再解析**
+   - 发送完成等待 `IF_TX_END`：正常 3ms 窗口（扫描模式 2ms），用 `system_tick_ms` 截止，
+     不再用「忙等迭代次数 × 估算耗时」
+   - 等待 VDM 响应：正常 100ms，分步路径 35ms（规范 tSenderResponse 为 24~30ms，留余量）
+   - 分步读取相邻两步之间至少让出 20ms，保证按键/显示不被饿死
+
 ## 4. 算法设计
 
 ### 4.1 电阻计算算法（整数运算）
@@ -891,13 +970,13 @@ adc_value = R_cable × OPAMP_GAIN × ADC_RESOLUTION / (SERIES_RESISTOR + R_cable
 R_cable = adc_value × SERIES_RESISTOR / (OPAMP_GAIN × ADC_RESOLUTION - adc_value)
 
 代入数值：
-SERIES_RESISTOR = 100000 mΩ
+SERIES_RESISTOR = 50000 mΩ
 OPAMP_GAIN = 101（运放同向放大，增益 = 1 + 10kΩ / 100Ω = 101）
 ADC_RESOLUTION = 4095
-R_cable(mΩ) = adc_value × 100000 / (101 × 4095 - adc_value)
+R_cable(mΩ) = adc_value × 50000 / (101 × 4095 - adc_value)
 
 未放大通道（OPAMP_GAIN = 1）：
-R_cable(mΩ) = adc_value × 100000 / (4095 - adc_value)
+R_cable(mΩ) = adc_value × 50000 / (4095 - adc_value)
 ```
 
 **性能分析**：
@@ -953,16 +1032,18 @@ void Test_Cable_Resistance(test_result_t *result)
 ## 5. 错误处理
 
 ### 5.1 ADC异常
-- ADC读数超出范围：显示">1000"
-- ADC通信失败：重试3次
+- ADC 读数超出量程：界面显示 `----`（开路/超范围）
+- ADC 通信失败：重试 3 次
 
 ### 5.2 SPI1异常
-- TFT初始化失败：显示空白屏幕
-- SPI1通信超时：重置SPI1
+- TFT 初始化失败：显示空白屏幕
+- SPI 等待 TXE/Idle 带 10ms 上界（`SPI_WAIT_TIMEOUT = 50000` 次轮询）：
+  超时只丢弃本次字节，**不会阻塞主循环**。
+  早期是无上界 `while` 死等，一旦 SPI 状态异常整机界面就卡死
 
 ### 5.3 测试异常
-- 开路检测：电阻显示">1000mΩ"
-- 短路检测：电阻显示"0mΩ"
+- 开路检测：电阻显示 `----`
+- 短路检测：电阻显示 `0 mΩ`
 
 ## 6. 性能指标
 
@@ -983,20 +1064,20 @@ void Test_Cable_Resistance(test_result_t *result)
 
 | 指标 | 要求 | 实际 | 状态 |
 |------|------|------|------|
-| 显示刷新率 | ≥10Hz | ~20Hz | ✅ 超额 |
+| 帧周期 | - | 通断页 200ms（5Hz）/ E-Mark 页 50ms（20Hz，便于分步读取推进） | ✅ |
 | SPI时钟频率 | - | 12MHz | ✅ 优秀 |
-| 帧刷新时间 | - | ~15ms | ✅ 优秀 |
+| 帧刷新时间 | - | ~15ms（实测单帧绘制最坏值见 `g_draw_max_ms`） | ✅ 优秀 |
 
-### 6.3 系统性能（V1.7 状态机版本）
+### 6.3 系统性能（V2.4）
 
 | 指标 | 要求 | 实际 | 状态 |
 |------|------|------|------|
-| 按键响应时间 | <100ms | **<10ms** | ✅ **超额** |
-| 代码体积 | - | ~42KB | ✅ 正常 |
-| RAM占用 | - | ~5.5KB | ✅ 正常 |
+| 按键响应时间 | <100ms | 典型 <10ms；E-Mark 读取失败重试期间最坏约 50ms（`g_loop_max_gap` 实测，随候选数与线缆浮动） | ✅ 达标 |
+| 代码体积 | - | 21.4KB（text 21420 + data 176，诊断默认关闭） | ✅ 正常 |
+| RAM 占用 | - | 约 2.6KB（bss 2404 + data 176） | ✅ 正常 |
 | 功耗（待机） | - | <1mA | ✅ 优秀 |
-| **系统实时性** | - | **事件驱动** | ✅ **优秀** |
-| **主循环阻塞** | - | **无阻塞** | ✅ **优秀** |
+| **系统实时性** | - | **事件驱动 + 分步状态机** | ✅ **优秀** |
+| **主循环阻塞** | - | **无阻塞（单次 PD 事务 ≤72ms）** | ✅ **优秀** |
 
 ### 6.4 V1.7 架构优势
 
@@ -1166,20 +1247,17 @@ void Delay_Us(uint32_t n)
 
 ### 9.2 中期优化（可选）
 
-1. **PD协议集成**
-   - 实现USB PD通信
-   - 读取E-mark详细信息
-   - 解析PDO消息
-
-2. **UI优化**
+1. **UI优化**
    - 改进显示效果
    - 添加动画效果
    - 优化用户体验
 
-3. **双缓冲技术**
+2. **双缓冲技术**
    - 在SRAM中维护帧缓冲区
    - 后台渲染，前台刷新
    - 减少闪烁
+
+> 原「PD 协议集成（读取 E-mark 详细信息、解析 PDO）」已在 V1.1~V2.4 完成。
 
 ## 10. 相关文档
 
@@ -1213,25 +1291,63 @@ MSB                                                                  LSB
 | 5 | Reserved | 0 |
 | 4:0 | Command | 0x01（Discover Identity） |
 
-## A.2 Active Cable VDO1（32位）
+## A.2 Cable VDO（被动 / 主动）
 
-```
-MSB                                                                  LSB
-┌──────┬──────┬──────┬──────┬────────┬──────┬──────┬──────┬──────────┐
-│31:27 │ 26:24│23:21 │ 20:19│  18:16 │ 15:13│12:11 │ 10:9 │   8:0    │
-├──────┼──────┼──────┼──────┼────────┼──────┼──────┼──────┼──────────┤
-│Rsvd  │ SSID │Rsvd  │  Lkt │  SSIF  │ Rsvd │VBUS  │  VDO │ USB最高  │
-│      │      │      │      │        │      │Max   │Ver   │ 速度     │
-└──────┴──────┴──────┴──────┴────────┴──────┴──────┴──────┴──────────┘
-```
+依据 `doc/USB_PD_R3.2_V1.2_2026_03_17.pdf`：
 
-| 位域 | 说明 | 典型值 |
-|------|------|--------|
-| 2:0 | USB最高速度 | 000=USB2.0, 001=USB3.2G1, 010=USB3.2G2, 011=USB4G3, 100=USB4G4 |
-| 10:9 | VDO版本 | 00=1.0, 01=2.0 |
-| 12:11 | VBUS Max | 00=VBUSonly, 01=3A, 10=5A |
-| 20:19 | 有源线缆类型 | 00=非EMCA, 01=EMCA |
-| 26:24 | SSID（两侧相同） | |
+- 被动线缆：**Table 6.42**（p.161）
+- 主动线缆：**Table 6.43** VDO1（p.164）、**Table 6.44** VDO2（p.166）
+
+位位置大体相同，但同一位置含义不同，**必须按线缆类型分别解析**。
+
+### A.2.1 VDO1 位定义对照
+
+| 位 | 被动线缆（6.42） | 主动线缆（6.43） |
+|---|---|---|
+| 31:28 | Hardware Version | Hardware Version |
+| 27:24 | Firmware Version | Firmware Version |
+| 23:21 | VDO Version（000b=1.0，其余无效） | VDO Version（000b/010b 弃用，011b=1.3） |
+| 20 | Reserved | Reserved |
+| 19:18 | 10b=Type-C，11b=Captive | 同 |
+| 17 | EPR Capable | EPR Capable |
+| 16:13 | Latency：0001b~0111b=1~7m，**1000b=">7m"**，其余无效 | Latency：0001b~0111b=1~7m，**1000b~1010b=100/200/300m**，其余无效 |
+| 12:11 | 00b=不需 VCONN，01b=需持续 VCONN，10b/11b 无效 | 10b=一端有源一端无源需 VCONN，11b=两端有源需 VCONN，00b/01b 无效 |
+| 10:9 | 00b=20V，01b/10b 弃用按 20V，11b=50V | 同 |
+| 8 | **Reserved** | SBU Supported（**0=支持**，反逻辑） |
+| 7 | **Reserved** | SBU Type（0=无源，1=有源） |
+| 6:5 | 电流：00b/11b 无效按 3A，01b=3A，**10b=5A** | 同上，但 **VBUS Through=0 时整段忽略** |
+| 4 | **Reserved** | VBUS Through Cable（0=无直通 VBUS） |
+| 3 | **Reserved** | SOP'' Controller Present |
+| 2:0 | USB Highest Speed | USB Highest Speed |
+| 2:0 取值 | 000=USB2 / 001=Gen1 / 010=Gen2 / 011=USB4 G3 / 100=USB4 G4 | 同 |
+
+### A.2.2 Active Cable VDO2（Table 6.44）
+
+| 位 | 字段 | 说明 |
+|---|---|---|
+| 31:24 | Maximum Operating Temperature | 最高工作温度（℃） |
+| 23:16 | Shutdown Temperature | 关断温度（℃） |
+| 15 | Reserved | |
+| 14:12 | U3/CLd Power | >10mW … <50µW 共 7 档 |
+| 11 | U3→U0 Mode | 0=直接，1=经 U3S |
+| 10 | Physical Connection | 0=铜，1=光纤 |
+| 9 | Active Element | 0=Re-driver，1=Re-timer |
+| 8 | USB4 Supported | **0=支持**（反逻辑） |
+| 7:6 | USB2 Hub Hops | |
+| 5 | USB2 Supported | **0=支持**（反逻辑） |
+| 4 | USB3.2 Supported | **0=支持**（反逻辑） |
+| 3 | USB Lanes | 0=1 lane，1=2 lanes |
+| 2 | Optically Isolated | |
+| 1 | USB4 Asymmetric | |
+| 0 | USB Gen | 0=Gen1，1=Gen2+ |
+
+### A.2.3 界面呈现差异
+
+| 位置 | 被动线缆 | 主动线缆 |
+|---|---|---|
+| 标题栏右侧 | `Passive` | `Active` |
+| 第 2 行左 | `VCON:Req/No`（Termination） | `SBU:Act/Pas/No` |
+| 第 5 行 | `HW:0xX FW:0xX` | `T:最高/关断` + `Cu|Opt / Rdrv|RTmr`（取自 VDO2） |
 
 ## A.3 GoodCRC消息头
 
@@ -1268,22 +1384,26 @@ MSB                                                                  LSB
 
 ## A.5 线缆长度解析（Cable VDO1 Latency 位 16:13）
 
-Latency 表示信号在线缆内的延迟，可用于近似估算线缆长度：
+Latency 表示信号在线缆内的延迟，用于近似估算长度。
+**被动线与主动线在 1000b 以上的编码完全不同，不能共用一张表**：
 
-| Latency (16:13) | 延迟 | 近似长度 |
-|-----------------|------|---------|
-| 0000b | - | 无效（不得使用） |
-| 0001b | <10ns | ~1m |
-| 0010b | 10-20ns | ~2m |
-| 0011b | 20-30ns | ~3m |
-| 0100b | 30-40ns | ~4m |
-| 0101b | 40-50ns | ~5m |
-| 0110b | 50-60ns | ~6m |
-| 0111b | 60-70ns | ~7m |
-| 1000b | 1000ns | ~100m |
-| 1001b | 2000ns | ~200m |
-| 1010b | 3000ns | ~300m |
-| 1011b-1111b | - | 无效（不得使用） |
+| Latency | 被动线缆（Table 6.42） | 主动线缆（Table 6.43） |
+|---|---|---|
+| 0000b | 无效（不得使用） | 无效（不得使用） |
+| 0001b | ~1m（<10ns） | ~1m |
+| 0010b | ~2m（10-20ns） | ~2m |
+| 0011b | ~3m（20-30ns） | ~3m |
+| 0100b | ~4m（30-40ns） | ~4m |
+| 0101b | ~5m（40-50ns） | ~5m |
+| 0110b | ~6m（50-60ns） | ~6m |
+| 0111b | ~7m（60-70ns） | ~7m |
+| 1000b | **">7m"（>70ns）** | ~100m（1000ns） |
+| 1001b | 无效 | ~200m（2000ns） |
+| 1010b | 无效 | ~300m（3000ns） |
+| 1011b~1111b | 无效 | 无效 |
+
+固件中对应两张查表：`passive_lat_len_str[]` / `active_lat_len_str[]`，
+由 `cable_type` 选择。
 
 ---
 
