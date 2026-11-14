@@ -12,23 +12,46 @@
 *******************************************************************************/
 #include "debug.h"
 
-static uint8_t  p_us = 0;
-static uint16_t p_ms = 0;
-
 #define DEBUG_DATA0_ADDRESS  ((volatile uint32_t*)0xE0000380)
 #define DEBUG_DATA1_ADDRESS  ((volatile uint32_t*)0xE0000384)
 
 /*********************************************************************
  * @fn      Delay_Init
  *
- * @brief   Initializes Delay Funcation.
+ * @brief   Delay 模块初始化（保留以兼容既有初始化顺序）
  *
  * @return  none
+ *
+ * @note    旧实现用 p_us/p_ms 做软件循环计数，现已改为读 SysTick->CNT，
+ *          不再需要任何预计算；本函数留空以免改动调用点。
  */
 void Delay_Init(void)
 {
-    p_us = SystemCoreClock / 8000000;
-    p_ms = (uint16_t)p_us * 1000;
+}
+
+/*********************************************************************
+ * @fn      Delay_Cycles_Per_Us
+ *
+ * @brief   取得「1us 对应的 SysTick 计数周期数」
+ *
+ * @return  每微秒的周期数（至少为 1）
+ *
+ * @note    优先用 SysTick 的重装载值反推（CMP+1 就是 1ms 的周期数），
+ *          这样不依赖 SystemCoreClock 是否已 Update；SysTick 还没配置时
+ *          才退回主频计算。
+ */
+static uint32_t Delay_Cycles_Per_Us(void)
+{
+    uint32_t reload = SysTick->CMP + 1u;
+
+    if(reload > 1000u) {
+        return reload / 1000u;
+    }
+
+    {
+        uint32_t clk = SystemCoreClock / 1000000u;
+        return (clk != 0u) ? clk : 1u;
+    }
 }
 
 /*********************************************************************
@@ -40,40 +63,38 @@ void Delay_Init(void)
  *
  * @return  None
  *
- * @note    利用SysTick的CNT寄存器实现精确微秒级延时
- *          SysTick配置：1ms中断周期，CMP = SystemCoreClock/1000 - 1
- *          CNT从0计数到CMP后清零重装载
- *          精度误差：< 1%
+ * @note    SysTick 的 CNT 从 0 递增到 CMP 后自动归零并产生 1ms 中断。
+ *          旧实现用 while(CNT >= start) 等回绕，有两个坑：
+ *            1) start 恰好为 0 时条件恒真，直接返回，延时严重不足；
+ *            2) 跨回绕时先白等接近 1ms，PD 时序窗口会被拖爆。
+ *          现改为「读 CNT 差值并累加」，既不依赖相位、也不会白等：
+ *          CNT 只增不减（归零由硬件完成），每圈把实际经过的周期数累加，
+ *          累加到目标周期数即返回，跨回绕时补上 (CMP+1-last)+now。
+ *          spin 上限仅用于防止 SysTick 停摆（例如调试器 halt）时死等。
  */
 void Delay_Us(uint32_t n)
 {
-    if(n == 0) return;
+    uint32_t cycles, last, acc, spin;
 
-    /* 计算需要的时钟周期数 */
-    uint32_t ticks_needed = (SystemCoreClock / 1000000) * n;
-    uint32_t reload_value = SysTick->CMP + 1;  /* 重装载值（CMP+1）*/
-
-    /* 如果延时超过1ms，分段处理 */
-    while(ticks_needed > reload_value) {
-        /* 等待当前周期结束（CNT回到0）*/
-        uint32_t start = SysTick->CNT;
-        while(SysTick->CNT >= start);  /* 等待CNT回绕 */
-        ticks_needed -= reload_value;
+    if(n == 0u) {
+        return;
     }
 
-    /* 处理剩余不足1ms的部分 */
-    if(ticks_needed > 0) {
-        uint32_t start = SysTick->CNT;
-        uint32_t end = start + ticks_needed;
+    cycles = Delay_Cycles_Per_Us() * n;
+    last   = SysTick->CNT;
+    acc    = 0u;
+    spin   = cycles + 1024u;   /* 每轮至少前进 1 个周期，正常远用不到 */
 
-        if(end <= reload_value) {
-            /* 无回绕情况 */
-            while(SysTick->CNT < end);
+    while((acc < cycles) && (spin-- != 0u)) {
+        uint32_t now = SysTick->CNT;
+
+        if(now >= last) {
+            acc += now - last;
         } else {
-            /* 有回绕情况 */
-            while(SysTick->CNT >= start);  /* 等待回绕 */
-            while(SysTick->CNT < (end - reload_value));
+            /* 跨过 1ms 回绕：先补到 CMP，再补归零后的 now */
+            acc += (SysTick->CMP + 1u - last) + now;
         }
+        last = now;
     }
 }
 
@@ -86,19 +107,13 @@ void Delay_Us(uint32_t n)
  *
  * @return  None
  *
- * @note    利用SysTick的CNT寄存器实现精确毫秒级延时
- *          SysTick配置：1ms中断周期，每次CNT回绕即为1ms
- *          精度误差：< 1%
+ * @note    按 1ms 分段调用 Delay_Us(1000)，不再依赖 "CNT>=start 等回绕"，
+ *          避免 start 为 0 时延时为 0 的问题。
  */
 void Delay_Ms(uint32_t n)
 {
-    if(n == 0) return;
-
-    uint32_t i;
-    for(i = 0; i < n; i++) {
-        /* 等待一次完整的SysTick周期（1ms）*/
-        uint32_t start = SysTick->CNT;
-        while(SysTick->CNT >= start);  /* 等待CNT回绕到0 */
+    while(n-- != 0u) {
+        Delay_Us(1000u);
     }
 }
 

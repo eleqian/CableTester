@@ -19,6 +19,8 @@ extern "C" {
 void SPI_Configuration(void);
 void SPI_WriteByte(uint8_t data);
 void SPI_Write_Buffer(const uint8_t *data, uint32_t len);  // 批量写入
+void SPI_Wait_TXE(void);    /* 有界等待发送缓冲空（异常时不死等） */
+void SPI_Wait_Idle(void);   /* 有界等待发送完成 */
 
 #ifdef __cplusplus
 }

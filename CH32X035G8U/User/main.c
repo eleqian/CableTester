@@ -20,6 +20,16 @@
 #include "cable_adc.h"
 #include "cable_spi.h"
 #include "cable_test.h"
+#include "cable_tft.h"
+#include "emarker_pd.h"
+
+/* 主循环最大间隔(ms)：衡量最坏情况下主循环被事务占住多久，
+ * 直接对应按键/插拔检测的最大延迟。WCH-Link + GDB 可直接回读。
+ * 由 CABLE_DEBUG_TIMING 控制，默认关闭（不占 RAM、不做统计）。 */
+#if CABLE_DEBUG_TIMING
+volatile uint32_t g_loop_max_gap = 0;
+volatile uint32_t g_loop_max_gap_mark = 0;
+#endif
 
 /**
  * @brief  SysTick配置函数（RISC-V CH32X035）
@@ -103,18 +113,45 @@ int main(void)
     // 显示欢迎界面
     TFT_ShowWelcome();
 
+    /* 上电后不再做全量 E-Mark 扫描：正式流程由状态机按需读取。
+     * 需要诊断时把 emarker_pd.h 的 EMARK_DEBUG_DIAG 置 1，这里会自动执行一次扫描，
+     * 并把结果固化到 g_emark_diag 供 GDB 回读。 */
+#if EMARK_DEBUG_DIAG
+    TFT_DrawString_Font(4, 20, "E-Mark scan...", COLOR_CYAN, COLOR_BLACK, FONT_8x16);
+    EMarker_Debug_Scan();
+    TFT_Clear(COLOR_BLACK);
+#endif
+
     // 主循环（无阻塞）
-    while (1) {
-        // 按键扫描（非阻塞，带消抖）
-        if (Key_Scan_With_Debounce()) {
-            // 切换显示模式
-            Switch_Display_Mode();
+    {
+#if CABLE_DEBUG_TIMING
+        uint32_t prev_tick = system_tick_ms;
+#endif
+        while (1) {
+            // 按键扫描（非阻塞，带消抖）
+            if (Key_Scan_With_Debounce()) {
+                // 切换显示模式
+                Switch_Display_Mode();
+            }
+
+            // 执行测试状态机（非阻塞）
+            Test_State_Machine();
+
+#if CABLE_DEBUG_TIMING
+            /* 记录本轮循环耗时（含被 PD 事务占住的时间） */
+            {
+                uint32_t now = system_tick_ms;
+                uint32_t gap = now - prev_tick;
+                if (gap > g_loop_max_gap) {
+                    g_loop_max_gap = gap;
+                    g_loop_max_gap_mark = now;
+                }
+                prev_tick = now;
+            }
+#endif
+
+            // 短暂延时，降低CPU占用
+            Delay_Ms(1);
         }
-
-        // 执行测试状态机（非阻塞）
-        Test_State_Machine();
-
-        // 短暂延时，降低CPU占用
-        Delay_Ms(1);
     }
 }

@@ -50,6 +50,26 @@ void SPI_Configuration(void)
     TFT_RS_HIGH();
 }
 
+/* SPI 等待超时上限：约 10ms（48MHz 下每次循环约十余个周期）。
+ * 原实现是无超时死等，一旦 SPI 状态异常（BSY 不清）整个主循环会被卡死：
+ * 屏幕停在最后一帧、按键与插拔检测全部失效，但 SysTick 仍在走 —— 
+ * 表现为「界面没反应、芯片却没死」。改成有界等待后最多丢字节，不会停摆。 */
+#define SPI_WAIT_TIMEOUT   50000u
+
+void SPI_Wait_TXE(void)
+{
+    uint32_t to = SPI_WAIT_TIMEOUT;
+    while (SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_TXE) == RESET && --to) {
+    }
+}
+
+void SPI_Wait_Idle(void)
+{
+    uint32_t to = SPI_WAIT_TIMEOUT;
+    while (SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_BSY) == SET && --to) {
+    }
+}
+
 /**
  * @brief  SPI写入一个字节 (硬件SPI)
  * @param  data: 要写入的数据
@@ -57,14 +77,12 @@ void SPI_Configuration(void)
  */
 void SPI_WriteByte(uint8_t data)
 {
-    // 等待发送缓冲区为空
-    while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_TXE) == RESET);
+    SPI_Wait_TXE();            /* 有界等待，避免异常时死等 */
 
     // 发送数据
     SPI_I2S_SendData(SPI1, data);
 
-    // 等待发送完成
-    while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_BSY) == SET);
+    SPI_Wait_Idle();           /* 有界等待发送完成 */
 }
 
 /**
@@ -79,13 +97,11 @@ void SPI_Write_Buffer(const uint8_t *data, uint32_t len)
     uint32_t i;
 
     for(i = 0; i < len; i++) {
-        // 等待发送缓冲区为空
-        while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_TXE) == RESET);
+        SPI_Wait_TXE();        /* 有界等待，避免异常时死等 */
 
         // 发送数据（不等待完成，继续发送下一个）
         SPI_I2S_SendData(SPI1, data[i]);
     }
 
-    // 最后等待所有数据发送完成
-    while(SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_BSY) == SET);
+    SPI_Wait_Idle();           /* 有界等待发送完成 */
 }

@@ -296,16 +296,16 @@ void TFT_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color
     // 批量发送像素数据（每个像素2字节）
     for (i = 0; i < pixel_count; i++) {
         // 等待TXE
-        while (SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_TXE) == RESET);
+        SPI_Wait_TXE();
         SPI_I2S_SendData(SPI1, color_high);
 
         // 等待TXE
-        while (SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_TXE) == RESET);
+        SPI_Wait_TXE();
         SPI_I2S_SendData(SPI1, color_low);
     }
 
     // 等待所有数据发送完成
-    while (SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_BSY) == SET);
+    SPI_Wait_Idle();
 
     // 释放CS
     TFT_CS_HIGH();
@@ -353,7 +353,7 @@ void TFT_DrawChar_Font(uint16_t x, uint16_t y, char c, uint16_t color, uint16_t 
             uint8_t byte_data = font_data[group * font_info->width + i];
 
             // 等待TXE
-            while (SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_TXE) == RESET);
+            SPI_Wait_TXE();
             if (byte_data & (1 << offset)) {
                 SPI_I2S_SendData(SPI1, color_high);
             } else {
@@ -361,7 +361,7 @@ void TFT_DrawChar_Font(uint16_t x, uint16_t y, char c, uint16_t color, uint16_t 
             }
 
             // 等待TXE
-            while (SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_TXE) == RESET);
+            SPI_Wait_TXE();
             if (byte_data & (1 << offset)) {
                 SPI_I2S_SendData(SPI1, color_low);
             } else {
@@ -371,7 +371,7 @@ void TFT_DrawChar_Font(uint16_t x, uint16_t y, char c, uint16_t color, uint16_t 
     }
 
     // 等待所有数据发送完成
-    while (SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_BSY) == SET);
+    SPI_Wait_Idle();
 
     // 释放CS
     TFT_CS_HIGH();

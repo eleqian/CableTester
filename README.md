@@ -34,8 +34,8 @@
 ├───────────────────────────────────┤
 │        R: 123 mΩ                  │  ← 电源线电阻（12×24 大字体）
 ├───────────────────────────────────┤
-│ ■ D+- ■ CC ■ SBU ■ SHLD           │  ← 信号通断
-│ ■ TX1 ■ RX1 ■ TX2 ■ RX2           │     绿=通 / 红=断
+│ ■ D+- ■ CC  ■ SBU ■ SHLD          │  ← 信号通断（绿=通 / 红=断）
+│ ■ TX1 ■ RX1 ■ TX2 ■ RX2           │
 ├───────────────────────────────────┤
 │ E-Marker: 5A      USB 3.2 Gen2    │  ← E-Mark 摘要 / 速率
 └───────────────────────────────────┘
@@ -51,7 +51,7 @@
 ┌───────────────────────────────────┐  160×80
 │ E-Mark: YES          Passive      │  ← E-Mark 存在性 / 线缆类型
 ├───────────────────────────────────┤
-│ USB 3.2 Gen2            5A        │  ← 速率等级 / 电流能力
+│ USB 3.2 Gen2            5A        │  ← 速率等级 / 电流能力（12×24 大字体）
 ├───────────────────────────────────┤
 │ EPR: Yes    MaxV: 20V             │  ← EPR 支持 / 最大电压
 │ SBU: Yes    Len: ~1m              │  ← SBU 支持 / 线缆长度
@@ -116,6 +116,26 @@ make -j16 all
 
 产物：`obj/CH32X035G8U.elf`（另含 `.hex`/`.lst`/`.map`）。工具链：`riscv-none-embed-gcc`（GCC 8.2.0，`-march=rv32imacxw -mabi=ilp32`，`-Os`）。
 
+### 调试开关（默认关闭）
+
+诊断代码全部由编译宏控制，正式固件默认不编译、不占资源。需要用 WCH-Link + GDB
+回读内部状态时，把对应宏改成 `1` 重新编译即可，调用点无需改动。
+
+| 宏 | 定义位置 | 默认 | 打开后得到什么 |
+|---|---|---|---|
+| `EMARK_DEBUG_DIAG` | `User/emarker_pd.h` | `0` | `g_emark_diag`（16 组候选的 stage/fail/CC 电压/VCONN 指纹/波形翻转）、`g_t_setup`/`g_t_tx`/`g_task_max_ms` 分段耗时、上电自动全量扫描 |
+| `CABLE_DEBUG_TIMING` | `User/cable_test.h` | `0` | `g_loop_max_gap`（主循环最大间隔，即按键最坏延迟）、`g_det_max_ms`、`g_draw_max_ms` |
+
+两者都关时：`text 21420 / bss 2404`；都开时：`text 22700 / bss 3216`。
+
+GDB 回读示例：
+
+```
+target remote localhost:3333
+print g_emark_diag
+print g_loop_max_gap
+```
+
 ### 固件下载
 
 #### 使用WCH-Link
@@ -133,9 +153,10 @@ make -j16 all
 
 ## 文档
 
-- **详细设计文档**: [doc/CableTester_Design.md](doc/CableTester_Design.md)（含 USB PD 位域定义附录）
-- **CH32X035 数据手册**: [doc/CH32X035DS0.PDF](doc/CH32X035DS0.PDF)
-- **CH32X035 参考手册**: [doc/CH32X035RM.PDF](doc/CH32X035RM.PDF)
+- **详细设计文档**: [CableTester_Design.md](doc/CableTester_Design.md)（含 USB PD 位域定义附录）
+- **CH32X035 数据手册**: [CH32X035DS0.PDF](doc/CH32X035DS0.PDF)
+- **CH32X035 参考手册**: [CH32X035RM.PDF](doc/CH32X035RM.PDF)
+- **电路图**: [sch.png](doc/sch.png)
 
 ---
 
@@ -148,6 +169,7 @@ make -j16 all
 | V2.0 | 2026-07-26 | 新硬件版本适配 |
 | V2.1 | 2026-08-02 | 界面美化 |
 | V2.2 | 2026-08-08 | E-Mark 通信可靠性：右口 Rd 下拉自动检测与交换（复用 PA1↔PA2 间 5.1kΩ，方向随线缆插入方向自动试错切换） |
+| V2.3 | 2026-11-14 | 支持VBUS供电的 E-Mark，优化信息显示和按键响应 |
 
 ## 许可证
 

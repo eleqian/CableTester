@@ -33,18 +33,48 @@
 
 /*
  * 电阻测量关键参数（Key measurement parameters）
- * SERIES_RESISTOR = 100000 mΩ = 100Ω 串联参考电阻
- * OPAMP_GAIN = 101（由 1 + 10kΩ/100Ω = 101 决定）
+ * SERIES_RESISTOR = 50000 mΩ = 50Ω 串联参考电阻
+ *   （硬件已把 V_TEST→VBUS 的 R5 由 100Ω 改为 50Ω：E-Mark 读取时 VBUS
+ *    压降减半，3.3V 经 50Ω + 约 1k 负载可到约 3.14V，越过 VBUS 供电型
+ *    E-Marker 的 UVLO；同时电阻测量公式必须同步用 50Ω，否则读数翻倍）
+ * OPAMP_GAIN = 101（由 1 + 10kΩ/100Ω = 101 决定，此处 Rg 是运放反馈下臂，
+ *   与上面被更换的串联参考电阻 R5 不是同一个器件，增益不变）
  *
- * 放大通道公式：R(mΩ) = adc × 100000 / (101 × 4095 - adc)
- * 未放大通道公式：R(mΩ) = adc × 100000 / (4095 - adc)
+ * 放大通道公式：R(mΩ) = adc × 50000 / (101 × 4095 - adc)
+ * 未放大通道公式：R(mΩ) = adc × 50000 / (4095 - adc)
  */
 #define OPAMP_GAIN 101
-#define SERIES_RESISTOR 100000
+#define SERIES_RESISTOR 50000
 
 #define RES_CABLE_MAX         10000000    /* 有效测量上限(mΩ) = 10kΩ             */
 #define RES_SATURATED         (RES_CABLE_MAX + 1)  /* 双通道饱和返回值 → OL     */
 #define RES_DISPLAY_MAX_MOHM  RES_CABLE_MAX  /* 显示上限(mΩ): >=10kΩ时显示"----" */
+
+/* E-Mark 事务限流时间戳：读取失败时回退路径要跑多次 PD 事务(~600ms)，
+ * 原实现每 200ms 就重跑一次，主循环被长期占用 → 按键无响应。
+ * 失败后改为 5s 重试一次；已读成功则不再自动重跑（按 KEY 换模式时强制重测）。 */
+static uint32_t last_emark_try_time = 0;
+#define EMARK_RETRY_INTERVAL_MS  5000u
+
+/* 是否到了下一次读取时机。初值 0 要特判：否则开机前 5 秒
+ * （当前tick - 0 < 5000）会完全不读取 */
+static uint8_t Emark_Retry_Due(uint32_t now)
+{
+    return (last_emark_try_time == 0u) ||
+           ((now - last_emark_try_time) >= EMARK_RETRY_INTERVAL_MS);
+}
+
+/* E-Mark 在线状态（插拔边沿检测）：E-MARK 模式下每 200ms 采样一次 Ra≈1k，
+ * 拔线立即清结果、插入立即读取，实现插拔自动刷新。
+ * absent_cnt 做去抖：连续 2 次（≈400ms）检测不到才判定拔线，避免偶发误判闪屏。 */
+static uint8_t s_emark_present = 0;
+static uint8_t s_emark_absent_cnt = 0;
+
+/* 调试：在线检测与整帧绘制的最大耗时（ms），由 CABLE_DEBUG_TIMING 控制 */
+#if CABLE_DEBUG_TIMING
+volatile uint32_t g_det_max_ms = 0;
+volatile uint32_t g_draw_max_ms = 0;
+#endif
 
 /* 当前使用的ADC通道：1=V_PWR_L(放大), 0=V_PWR_H(未放大)，每周期从V_PWR_L开始 */
 static uint8_t use_v_pwr_l_channel;
@@ -116,6 +146,7 @@ void Cable_Test_Init(void)
     test_result.resistance_mohm = 0;
     test_result.has_emark = 0;
     test_result.fast_charge = FAST_CHARGE_NONE;
+    test_result.emark_state = EMARK_STATE_IDLE;
     Reset_Emark_Info(&test_result.emark);
 
     display_mode = MODE_CONTINUITY;
@@ -157,6 +188,15 @@ void Switch_Display_Mode(void)
     display_mode++;
     if (display_mode >= MODE_MAX) {
         display_mode = MODE_CONTINUITY;
+    }
+    /* 换线后切到 E-Mark 模式：清掉旧结果并立即读一次。
+     * 原来先跑 EMarker_Debug_Scan()（固定供电后已无必要），且把限流时间戳
+     * 置为“现在”，导致切过去要再等 5 秒才真正读取。 */
+    if (display_mode == MODE_EMARK) {
+        Reset_Emark_Info(&test_result.emark);
+        test_result.has_emark = 0;
+        test_result.emark_state = EMARK_STATE_IDLE;
+        last_emark_try_time = system_tick_ms - EMARK_RETRY_INTERVAL_MS;
     }
     test_state = TEST_STATE_START;
 }
@@ -321,6 +361,11 @@ static uint8_t Detect_Emark_Chip_Internal(void)
     return EMarker_Detect_Chip();
 }
 
+/**
+ * @brief  一次性读取 E-Mark 信息（阻塞式兼容接口）
+ * @note   正式流程已改为在状态机里逐帧调用 EMarker_Task_Step()，本函数保留
+ *         给需要"一次调用拿到结果"的场景（会阻塞数十~数百 ms，不要在 UI 线程用）。
+ */
 void Detect_Emark_Info(test_result_t *result)
 {
     emarker_info_t emark_info;
@@ -464,15 +509,20 @@ static void Resistance_Test_State_Machine(void)
 void Test_State_Machine(void)
 {
     uint32_t current_time = system_tick_ms;
+    emarker_info_t emark_info;   /* 分步读取的临时结果 */
 
     switch (test_state) {
     case TEST_STATE_IDLE:
-        /* 每200ms触发一次测试周期（≈5次/秒） */
-        if (current_time - last_test_time >= 200) {
+    {
+        /* 通断页 200ms 一拍（电阻测量节拍）；E-Mark 页 50ms 一拍，
+         * 让分步重试每帧推进一步，同时保持按键扫描频率 */
+        uint32_t period = (display_mode == MODE_EMARK) ? 50u : 200u;
+        if (current_time - last_test_time >= period) {
             last_test_time = current_time;
             test_state = TEST_STATE_START;
         }
         break;
+    }
 
     case TEST_STATE_START:
         switch (display_mode) {
@@ -482,15 +532,39 @@ void Test_State_Machine(void)
             /* E-Mark检测：首次探测到时读取基本信息 */
             CC_E_Set_Floating();
             if (EMarker_Detect_Chip()) {
-                if (!test_result.emark.valid) {
-                    Detect_Emark_Info(&test_result);
-                }
                 test_result.has_emark = 1;
+                /* 分步读取：每次只做一次事务，失败重试不阻塞按键 */
+                if (!test_result.emark.valid) {
+                    uint8_t r;
+                    if (EMarker_Task_Busy()) {
+                        r = EMarker_Task_Step(&emark_info);
+                        if (r == EMARK_OK) {
+                            test_result.emark = emark_info;
+                            test_result.emark_state = EMARK_STATE_OK;
+                        } else if (r == EMARK_TASK_BUSY) {
+                            /* 已判定失败后的后台重试不再切回 Reading，避免闪字 */
+                            if (test_result.emark_state != EMARK_STATE_FAIL) {
+                                test_result.emark_state = EMARK_STATE_READING;
+                            }
+                        } else {
+                            /* 18 个候选全部失败，或 CC 上检测不到芯片 */
+                            test_result.emark_state = EMARK_STATE_FAIL;
+                        }
+                    } else if (Emark_Retry_Due(current_time)) {
+                        last_emark_try_time = current_time;
+                        if (test_result.emark_state != EMARK_STATE_FAIL) {
+                            test_result.emark_state = EMARK_STATE_READING;
+                        }
+                        (void)EMarker_Task_Step(&emark_info);   /* 启动一轮 */
+                    }
+                }
             } else {
+                EMarker_Task_Abort();
                 if (test_result.has_emark) {
                     test_result.has_emark = 0;
                     Reset_Emark_Info(&test_result.emark);
                 }
+                test_result.emark_state = EMARK_STATE_IDLE;
             }
             use_v_pwr_l_channel = 1;  /* 每周期从V_PWR_L高精度通道开始 */
             resistance_state = RESISTANCE_STATE_MOS_ON;
@@ -498,10 +572,75 @@ void Test_State_Machine(void)
             break;
 
         case MODE_EMARK:
-            CC_E_Set_Floating();  /* 检测前先释放右口CC总线；通信所需Rd由EMarker_Full_Detect内部使能 */
-            Detect_Emark_Info(&test_result);
+        {
+            /* 本页 50ms 一拍；在线检测本身约 10~15ms，改为每 200ms 采一次 */
+            static uint32_t s_presence_ms = 0;
+            /* 上次检测结果（200ms 才刷新），必须是 static：原来是非 static 局部变量，
+             * 未检测的那几拍会拿到栈上的随机值 */
+            static uint8_t present = 0;
+
+            CC_E_Set_Floating();  /* 检测前先释放右口CC总线 */
+
+            if ((current_time - s_presence_ms) >= 200u) {
+                s_presence_ms = current_time;
+                {
+                    uint32_t t_det = system_tick_ms;
+                    present = Detect_Emark_Chip_Internal() ? 1 : 0;
+                    t_det = system_tick_ms - t_det;
+                    TIMING_MAX(g_det_max_ms, t_det);
+                }
+                if (present) {
+                    s_emark_absent_cnt = 0;
+                } else if (s_emark_absent_cnt < 2) {
+                    s_emark_absent_cnt++;
+                }
+            }
+
+            if (s_emark_absent_cnt >= 2) {
+                /* 拔线：停掉分步读取，清掉旧信息，界面立即显示 NO */
+                EMarker_Task_Abort();
+                if (test_result.has_emark || test_result.emark.valid) {
+                    test_result.has_emark = 0;
+                    Reset_Emark_Info(&test_result.emark);
+                }
+                test_result.emark_state = EMARK_STATE_IDLE;
+                s_emark_present = 0;
+            } else {
+                if (!s_emark_present) {
+                    /* 插入边沿：回拨限流时间戳，立即开始读取（不等 5s） */
+                    last_emark_try_time = current_time - EMARK_RETRY_INTERVAL_MS;
+                    s_emark_present = 1;
+                }
+                test_result.has_emark = 1;
+                /* 分步读取：每拍最多做一次 PD 事务，失败重试期间按键照样能响应 */
+                if (!test_result.emark.valid) {
+                    uint8_t r;
+                    if (EMarker_Task_Busy()) {
+                        r = EMarker_Task_Step(&emark_info);
+                        if (r == EMARK_OK) {
+                            test_result.emark = emark_info;
+                            test_result.emark_state = EMARK_STATE_OK;
+                        } else if (r == EMARK_TASK_BUSY) {
+                            /* 已判定失败后的后台重试不再切回 Reading，避免闪字 */
+                            if (test_result.emark_state != EMARK_STATE_FAIL) {
+                                test_result.emark_state = EMARK_STATE_READING;
+                            }
+                        } else {
+                            /* 18 个候选全部失败，或 CC 上检测不到芯片 */
+                            test_result.emark_state = EMARK_STATE_FAIL;
+                        }
+                    } else if (Emark_Retry_Due(current_time)) {
+                        last_emark_try_time = current_time;
+                        if (test_result.emark_state != EMARK_STATE_FAIL) {
+                            test_result.emark_state = EMARK_STATE_READING;
+                        }
+                        (void)EMarker_Task_Step(&emark_info);   /* 启动一轮 */
+                    }
+                }
+            }
             test_state = TEST_STATE_COMPLETE;
             break;
+        }
 
         default:
             test_state = TEST_STATE_COMPLETE;
@@ -514,9 +653,14 @@ void Test_State_Machine(void)
         break;
 
     case TEST_STATE_COMPLETE:
+    {
+        uint32_t t_draw = system_tick_ms;
         TFT_ShowTestResult(&test_result, display_mode);
+        t_draw = system_tick_ms - t_draw;
+        TIMING_MAX(g_draw_max_ms, t_draw);
         test_state = TEST_STATE_IDLE;
         break;
+    }
 
     default:
         test_state = TEST_STATE_IDLE;
@@ -733,7 +877,15 @@ void TFT_ShowContinuity(test_result_t *result)
     char em_left[16];
     uint16_t em_color;
     if (result->has_emark && result->emark.valid) {
-        const char *cur_str = (result->emark.current_capability == CABLE_CURRENT_VBUS) ? "5A" : "3A";
+        /* 电流档：3A / 5A；主动线若线内无直通 VBUS，规范要求忽略电流字段 → "--" */
+        const char *cur_str;
+        if (result->emark.current_capability == CABLE_CURRENT_5A) {
+            cur_str = "5A";
+        } else if (result->emark.current_capability == CABLE_CURRENT_3A) {
+            cur_str = "3A";
+        } else {
+            cur_str = "--";
+        }
         sprintf(em_left, "E-Mark: %-2s ", cur_str);  /* 固定11字符宽度 */
         em_color = COLOR_GREEN;
     } else if (result->has_emark) {
@@ -763,23 +915,25 @@ void TFT_ShowContinuity(test_result_t *result)
 }
 
 /*
- * 线缆长度近似值（由Cable VDO1 Latency位 16:13 换算，见USB PD spec）
- * 信号延迟近似对应线缆长度：
- *   0000b无效 / 0001b~0111b = 1m~7m / 1000b~1010b = 100m~300m / 1011b~1111b无效
+ * 线缆长度近似值（由 Cable VDO1 Latency 位 16:13 换算）
+ * Passive Cable（Table 6.42）：
+ *   0000b 无效 / 0001b~0111b = 1m~7m / 1000b = >7m / 1001b~1111b 无效
+ * Active Cable（Table 6.43）：
+ *   0000b 无效 / 0001b~0111b = 1m~7m / 1000b=100m / 1001b=200m / 1010b=300m / 其余无效
+ * 两者 1000b 以上含义完全不同，必须分开查表。
  */
-static const char *const lat_len_str[16] = {
+static const char *const passive_lat_len_str[16] = {
     "?",     /* 0000: 无效 */
-    "~1m",   /* <10ns     */
-    "~2m",   /* 10-20ns   */
-    "~3m",   /* 20-30ns   */
-    "~4m",   /* 30-40ns   */
-    "~5m",   /* 40-50ns   */
-    "~6m",   /* 50-60ns   */
-    "~7m",   /* 60-70ns   */
-    "~100m", /* 1000ns    */
-    "~200m", /* 2000ns    */
-    "~300m", /* 3000ns    */
-    "?", "?", "?", "?", "?"  /* 1011-1111: 无效 */
+    "~1m", "~2m", "~3m", "~4m", "~5m", "~6m", "~7m",   /* 0001~0111 */
+    ">7m",   /* 1000b: >70ns */
+    "?", "?", "?", "?", "?", "?", "?"                  /* 1001~1111: 无效 */
+};
+
+static const char *const active_lat_len_str[16] = {
+    "?",     /* 0000: 无效 */
+    "~1m", "~2m", "~3m", "~4m", "~5m", "~6m", "~7m",   /* 0001~0111 */
+    "~100m", "~200m", "~300m",                         /* 1000~1010 */
+    "?", "?", "?", "?", "?"                            /* 1011~1111: 无效 */
 };
 
 /*
@@ -790,7 +944,7 @@ static const char *const lat_len_str[16] = {
  * │ USB 3.2 Gen2              5A        │ ← 速度+电流 (8x16)
  * ├─────────────────────────────────────┤ y=30
  * │ EPR:Yes   MaxV:20V                  │ ← 2列详细字段(左x=4/右x=82)
- * │ SBU:Yes   Len:~1m                   │
+ * │ VCON:Req  Len:~1m                   │
  * │ VID:0xFFFF PID:0xFFFF               │
  * │ HW:0x1    FW:0x1                    │
  * │ VDO:12345678 87654321               │ ← 原始VDO合并一行
@@ -800,10 +954,17 @@ static const char *const lat_len_str[16] = {
 void TFT_ShowEmark(test_result_t *result)
 {
     char buf[24];
-    static uint8_t last_has_emark = 0;
-    if (result->has_emark != last_has_emark) {
+    static uint8_t last_view_state = 0xFF;
+    /* has_emark 或 valid 任一变化都要清内容区，否则换线后读取失败
+     * （has_emark 仍为 1、valid 变 0）会残留上一根线的字段；
+     * 读取中 ↔ 失败 也要单独变化，否则 "Reading..." 与 "PD Comm Failed"
+     * 长度不同会留下残影 */
+    uint8_t view_state = (uint8_t)((result->has_emark ? 2u : 0u) |
+                                   (result->emark.valid ? 1u : 0u) |
+                                   ((result->emark_state == EMARK_STATE_FAIL) ? 4u : 0u));
+    if (view_state != last_view_state) {
         TFT_FillRect(0, 13, 160, 66, COLOR_BLACK);
-        last_has_emark = result->has_emark;
+        last_view_state = view_state;
     }
 
     /* --- 标题栏 (y=0): E-Mark状态 + 线缆类型(右侧) --- */
@@ -838,24 +999,29 @@ void TFT_ShowEmark(test_result_t *result)
         sprintf(buf, "%-14s", speed_str);
         TFT_DrawString_Font(5, 13, buf, speed_color, COLOR_BLACK, FONT_8x16);
 
-        const char *cur_str = (result->emark.current_capability == CABLE_CURRENT_VBUS) ? "5A" : "3A";
-        uint16_t cur_color = (result->emark.current_capability == CABLE_CURRENT_VBUS) ? COLOR_GREEN : COLOR_YELLOW;
+        /* 电流档：Active 线若线内无直通 VBUS（Bit4=0），规范要求忽略 Bit6:5，
+         * 解析层置 0xFF → 显示 "--"；Passive/普通 Active 只显示 3A 或 5A */
+        const char *cur_str;
+        uint16_t cur_color;
+        if (result->emark.current_capability == CABLE_CURRENT_5A) {
+            cur_str = "5A"; cur_color = COLOR_GREEN;
+        } else if (result->emark.current_capability == CABLE_CURRENT_3A) {
+            cur_str = "3A"; cur_color = COLOR_YELLOW;
+        } else {
+            cur_str = "--"; cur_color = COLOR_GRAY;
+        }
         TFT_DrawString_Font(130, 13, cur_str, cur_color, COLOR_BLACK, FONT_8x16);
 
         TFT_FillRect(0, 30, 160, 1, COLOR_DARK_GRAY);
 
         /* --- 2列详细字段 (y=34/43/52/61): 左列x=4, 右列x=82对齐 --- */
-        uint8_t maxv = (uint8_t)((result->emark.cable_vdo1 & CABLE_VDO1_MAX_VBUS_MASK) >> 9);
         uint8_t latency = (uint8_t)((result->emark.cable_vdo1 & CABLE_VDO1_LATENCY_MASK) >> 13);
-        uint8_t sbu = (result->emark.cable_vdo1 & CABLE_VDO1_SBU_SUPPORTED) ? 1 : 0;
         uint8_t hw_ver = (uint8_t)((result->emark.cable_vdo1 & CABLE_VDO1_HW_VERSION_MASK) >> 28);
         uint8_t fw_ver = (uint8_t)((result->emark.cable_vdo1 & CABLE_VDO1_FW_VERSION_MASK) >> 24);
-        const char *maxv_str;
-        switch (maxv) {
-            case CABLE_MAXV_20V: maxv_str = "20V"; break;
-            case CABLE_MAXV_50V: maxv_str = "50V"; break;
-            default:maxv_str = "20V"; break;
-        }
+        /* 主动/被动线缆的 Latency 表不同（1000b 以上含义完全不一样） */
+        uint8_t is_active = (result->emark.cable_type == CABLE_TYPE_ACTIVE) ? 1u : 0u;
+        const char *len_str = is_active ? active_lat_len_str[latency]
+                                        : passive_lat_len_str[latency];
 
         /* EPR + MaxV */
         sprintf(buf, "EPR:");
@@ -863,16 +1029,34 @@ void TFT_ShowEmark(test_result_t *result)
         sprintf(buf, "%-3s", result->emark.epr_capable ? "Yes" : "No");
         TFT_DrawString_Font(28, 34, buf, result->emark.epr_capable ? COLOR_GREEN : COLOR_GRAY,
                              COLOR_BLACK, FONT_5x8);
-        sprintf(buf, "MaxV:%-3s", maxv_str);
+        sprintf(buf, "MaxV:%-3s", result->emark.max_vbus_50v ? "50V" : "20V");
         TFT_DrawString_Font(82, 34, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x8);
 
-        /* SBU + Len */
-        sprintf(buf, "SBU:");
-        TFT_DrawString_Font(4, 43, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x8);
-        sprintf(buf, "%-3s", sbu ? "Yes" : "No");
-        TFT_DrawString_Font(28, 43, buf, sbu ? COLOR_GREEN : COLOR_GRAY,
-                             COLOR_BLACK, FONT_5x8);
-        sprintf(buf, "Len:%-5s", lat_len_str[latency]);
+        if (is_active) {
+            /* 主动线：左列显示 SBU 支持（Bit8 反逻辑），被动线该位是 Reserved */
+            sprintf(buf, "SBU:");
+            TFT_DrawString_Font(4, 43, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x8);
+            const char *sbu_str;
+            uint16_t sbu_color;
+            if (!result->emark.sbu_supported) {
+                sbu_str = "No "; sbu_color = COLOR_GRAY;
+            } else if (result->emark.sbu_active) {
+                sbu_str = "Act"; sbu_color = COLOR_GREEN;
+            } else {
+                sbu_str = "Pas"; sbu_color = COLOR_CYAN;
+            }
+            sprintf(buf, "%-3s", sbu_str);
+            TFT_DrawString_Font(28, 43, buf, sbu_color, COLOR_BLACK, FONT_5x8);
+        } else {
+            /* 被动线：左列显示 VCONN 需求（Bit12:11，00b=不需/01b=需） */
+            sprintf(buf, "VCON:");
+            TFT_DrawString_Font(4, 43, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x8);
+            uint8_t term_req = (result->emark.termination == CABLE_TERM_VCONN_REQ) ? 1u : 0u;
+            sprintf(buf, "%-3s", term_req ? "Req" : "No ");
+            TFT_DrawString_Font(32, 43, buf, term_req ? COLOR_GREEN : COLOR_GRAY,
+                                 COLOR_BLACK, FONT_5x8);
+        }
+        sprintf(buf, "Len:%-5s", len_str);
         TFT_DrawString_Font(82, 43, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x8);
 
         /* VID + PID */
@@ -881,22 +1065,39 @@ void TFT_ShowEmark(test_result_t *result)
         sprintf(buf, "PID:0x%04X", result->emark.product_id);
         TFT_DrawString_Font(82, 52, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x8);
 
-        /* HW + FW */
-        sprintf(buf, "HW :0x%X", hw_ver);
-        TFT_DrawString_Font(4, 61, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x8);
-        sprintf(buf, "FW :0x%X", fw_ver);
-        TFT_DrawString_Font(82, 61, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x8);
+        if (is_active) {
+            /* 主动线：温度/介质/元件（来自 Active Cable VDO2），HW/FW 对主动线价值较低 */
+            sprintf(buf, "T:%u/%u", result->emark.max_temp, result->emark.shutdown_temp);
+            TFT_DrawString_Font(4, 61, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x8);
+            sprintf(buf, "%s/%s", result->emark.optical ? "Opt" : "Cu",
+                                 result->emark.retimer ? "RTmr" : "Rdrv");
+            TFT_DrawString_Font(82, 61, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x8);
+        } else {
+            sprintf(buf, "HW :0x%X", hw_ver);
+            TFT_DrawString_Font(4, 61, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x8);
+            sprintf(buf, "FW :0x%X", fw_ver);
+            TFT_DrawString_Font(82, 61, buf, COLOR_WHITE, COLOR_BLACK, FONT_5x8);
+        }
 
         /* --- 原始VDO合并一行 (y=70) --- */
-        /* VDO:%08X(13字符) + %08X(8字符) = 21字符; VDO2缺失时补8空格固定宽度 */
+        /* VDO:%08lX(13字符) + %08lX(8字符) = 21字符; VDO2缺失时补8空格固定宽度。
+         * 用 %lX + unsigned long 强转：本工具链 uint32_t 就是 unsigned long，
+         * 直接 %08X 会触发 -Wformat 告警 */
         if (result->emark.cable_vdo2 != 0) {
-            sprintf(buf, "VDO:%08X %08X", result->emark.cable_vdo1, result->emark.cable_vdo2);
+            sprintf(buf, "VDO:%08lX %08lX", (unsigned long)result->emark.cable_vdo1,
+                    (unsigned long)result->emark.cable_vdo2);
         } else {
-            sprintf(buf, "VDO:%08X %8s", result->emark.cable_vdo1, "");
+            sprintf(buf, "VDO:%08lX %8s", (unsigned long)result->emark.cable_vdo1, "");
         }
         TFT_DrawString_Font(4, 70, buf, COLOR_GRAY, COLOR_BLACK, FONT_5x8);
-    } else if (result->has_emark && !result->emark.valid) {
-        TFT_DrawString_Font(5, 13, "PD Comm Failed", COLOR_RED, COLOR_BLACK, FONT_8x16);
+    } else if (result->has_emark) {
+        /* 有芯片但还没读到数据：区分「读取中」和「确实失败」。
+         * 旧实现直接显示 "PD Comm Failed"，切页第一帧就闪一次失败，很误导 */
+        if (result->emark_state == EMARK_STATE_FAIL) {
+            TFT_DrawString_Font(5, 13, "PD Comm Failed", COLOR_RED, COLOR_BLACK, FONT_8x16);
+        } else {
+            TFT_DrawString_Font(5, 13, "Reading...", COLOR_YELLOW, COLOR_BLACK, FONT_8x16);
+        }
     } else {
         TFT_DrawString_Font(5, 13, "No E-Mark Chip", COLOR_GRAY, COLOR_BLACK, FONT_8x16);
     }
@@ -936,7 +1137,7 @@ void TFT_ShowWelcome(void)
     /* 分隔线 */
     TFT_FillRect(3, 40, 154, 1, COLOR_DARK_GRAY);
     /* 版本+作者 */
-    TFT_DrawString_Font(32, 50, "V2.2", COLOR_CYAN, COLOR_BLACK, FONT_5x8);
+    TFT_DrawString_Font(32, 50, "V2.3", COLOR_CYAN, COLOR_BLACK, FONT_5x8);
     TFT_DrawString_Font(56, 50, "  by eleqian", COLOR_WHITE, COLOR_BLACK, FONT_5x8);
     /* 模拟进度条: 深灰底 + 青色填充动画 (20步×50ms = 1s) */
     TFT_FillRect(10, 68, 140, 6, COLOR_DARK_GRAY);

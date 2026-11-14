@@ -11,6 +11,10 @@ USB cable tester firmware for CH32X035G8U (RISC-V RV32IMAC, WCH/Qinheng). Bare-m
 - **ISA/ABI**: `-march=rv32imacxw -mabi=ilp32` (includes WCH XW custom extension).
 - **Project config**: `.cproject` (Eclipse CDT managed build). The `.wvproj` is an empty MounRiver Studio placeholder. The Makefiles under `obj/` are auto-generated — do not edit them by hand.
 - **Build output**: `obj/CH32X035G8U.elf` (62K flash, 20K RAM, linker script `Ld/Link.ld`), plus `.hex`, `.lst`, `.map`, `.siz`.
+- **Debug switches** (both default `0`, official build keeps them off):
+  `EMARK_DEBUG_DIAG` in `User/emarker_pd.h` (g_emark_diag diagnostics + scan),
+  `CABLE_DEBUG_TIMING` in `User/cable_test.h` (g_loop_max_gap and timing counters).
+  Turning them on adds ~1.2K flash / 812B bss but enables GDB readback of internals.
 - **Flash/debug**: WCH-Link via OpenOCD (`wch-riscv.cfg`), GDB on port 3333 (MounRiver Studio handles this).
 - **Include path order**: `Debug/`, `Core/`, `User/`, `Peripheral/inc/`.
 - **No CI, no linter, no tests** — verify correctness by compiling.
