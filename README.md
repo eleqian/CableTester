@@ -9,8 +9,8 @@
 - **交互**：1 个按键切换显示模式
 - **两组测试接口**：Type-A + Type-C（左侧）、Micro-B + Type-C（右侧）
 - **Type-C 全信号通断测试**：屏蔽层(EH)、VBUS/GND、CC、SBU、D+/D-、TX1/2、RX1/2
-- **电源线电阻测量**：两挡位自动切换，0~900mΩ 高精度 + 900mΩ~9.99kΩ 量程，纯整数运算
-- **E-Mark 芯片信息**：USB PD 读取（线缆类型、速度等级、电流能力、EPR、最高电压、VID/PID、线缆长度、HW/FW 版本、VDO 原始值）；**主动线与被动线按 PD R3.2 分开解析**，主动线额外显示 SBU、温度、铜/光纤、Re-driver/Re-timer、lane 数
+- **电源线电阻测量**：两挡位自动切换，0\~900mΩ 高精度 + 900mΩ\~9.99kΩ 量程，纯整数运算
+- **E-Mark 芯片信息**：USB PD 各种信息读取，支持主动和被动线缆，支持VCONN和VBUS供电芯片（3.3V，不支持需要5V供电的芯片）；
 - **华为快充线识别**：56kΩ 电阻检测
 
 ---
@@ -135,27 +135,7 @@ cd CH32X035G8U/obj
 make -j16 all
 ```
 
-产物：`obj/CH32X035G8U.elf`（另含 `.hex`/`.lst`/`.map`）。工具链：`riscv-none-embed-gcc`（GCC 8.2.0，`-march=rv32imacxw -mabi=ilp32`，`-Os`）。
-
-### 调试开关（默认关闭）
-
-诊断代码全部由编译宏控制，正式固件默认不编译、不占资源。需要用 WCH-Link + GDB
-回读内部状态时，把对应宏改成 `1` 重新编译即可，调用点无需改动。
-
-| 宏 | 定义位置 | 默认 | 打开后得到什么 |
-|---|---|---|---|
-| `EMARK_DEBUG_DIAG` | `User/emarker_pd.h` | `0` | `g_emark_diag`（16 组候选的 stage/fail/CC 电压/VCONN 指纹/波形翻转）、`g_t_setup`/`g_t_tx`/`g_task_max_ms` 分段耗时、上电自动全量扫描 |
-| `CABLE_DEBUG_TIMING` | `User/cable_test.h` | `0` | `g_loop_max_gap`（主循环最大间隔，即按键最坏延迟）、`g_det_max_ms`、`g_draw_max_ms` |
-
-两者都关时：`text 21420 / bss 2404`；都开时：`text 22700 / bss 3216`。
-
-GDB 回读示例：
-
-```
-target remote localhost:3333
-print g_emark_diag
-print g_loop_max_gap
-```
+产物：`obj/CH32X035G8U.elf`（另含 `.hex`/`.lst`/`.map`）。工具链：`riscv-none-embed-gcc`（`-march=rv32imacxw -mabi=ilp32`，`-Os`）。
 
 ### 固件下载
 
@@ -178,6 +158,7 @@ print g_loop_max_gap
 - **CH32X035 数据手册**: [CH32X035DS0.PDF](doc/CH32X035DS0.PDF)
 - **CH32X035 参考手册**: [CH32X035RM.PDF](doc/CH32X035RM.PDF)
 - **电路图**: [sch.png](doc/sch.png)
+- **立创开源项目（实物演示）**：[oshwhub](https://oshwhub.com/eleqian/project_nbpzkxcx)
 
 ---
 
@@ -191,8 +172,8 @@ print g_loop_max_gap
 | V2.1 | 2026-08-02 | 界面美化 |
 | V2.2 | 2026-08-08 | E-Mark 通信可靠性：右口 Rd 下拉自动检测与交换（复用 PA1↔PA2 间 5.1kΩ，方向随线缆插入方向自动试错切换） |
 | V2.3 | 2026-11-14 | 支持VBUS供电的 E-Mark，优化信息显示和按键响应 |
-| V2.4 | 2026-11-14 | E-Mark 按 PD R3.2 区分主动/被动线缆解析、修正电流档编码、改为非阻塞分步读取（重试期间按键可响应）、界面区分 Reading/失败；修复 `Delay_Us` 回绕缺陷；诊断代码收进编译宏并默认关闭（省 1.2KB Flash / 812B RAM） |
+| V2.4 | 2026-11-14 | E-Mark 区分主动/被动线缆解析、修正电流档编码、改为非阻塞分步读取（重试期间按键可响应）、界面区分 Reading/失败 |
 
 ## 许可证
 
-本项目的硬件设计和固件代码遵循相关开源协议。
+本项目的硬件设计和固件代码遵循MIT开源协议。
